@@ -1,0 +1,21 @@
+name: Datos diario (oficial)
+
+on:
+  schedule:
+    - cron: "40 12 * * 1-5"
+  workflow_dispatch: {}
+
+jobs:
+  diario:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install requests
+      - name: Bajar datos oficiales y escribir en Supabase
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        run: python guarismo_conector.py diario
