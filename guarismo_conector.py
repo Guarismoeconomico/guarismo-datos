@@ -42,24 +42,45 @@ def get(url, **kw):
 # 🟢 OFICIAL — INDEC (IPC) vía API de Series de datos.gob.ar
 # ===========================================================================
 SERIES_API = "https://apis.datos.gob.ar/series/api"
-IPC_FALLBACK_ID = "145.3_INGNACUAL_DICI_M_38"
 
-def _id_ipc():
+def _serie_ipc_indice():
+    """Resuelve la serie de IPC nivel general que devuelve NIVELES de índice
+    (valores grandes), descartando las series de variaciones. Prueba primero
+    'nacional' y, si no hay, cualquier 'nivel general'."""
     try:
-        for s in get(f"{SERIES_API}/search/",
-                     params={"q": "indice precios consumidor nivel general nacional",
-                             "limit": 15}).get("data", []):
-            d = (s.get("description","") + " " + s.get("title","")).lower()
-            if "nivel general" in d and "nacional" in d and "índice" in d:
-                return s["id"]
+        cands = get(f"{SERIES_API}/search/",
+                    params={"q": "indice precios consumidor nivel general mensual",
+                            "limit": 40}).get("data", [])
     except Exception:
-        pass
-    return IPC_FALLBACK_ID
+        cands = []
+
+    def buscar(requiere_nacional):
+        for s in cands:
+            sid = s.get("id")
+            desc = (s.get("description", "") + " " + s.get("title", "")).lower()
+            if "nivel general" not in desc:
+                continue
+            if requiere_nacional and "nacional" not in desc:
+                continue
+            try:
+                data = get(f"{SERIES_API}/series/",
+                           params={"ids": sid, "format": "json", "last": 15})["data"]
+                # aceptamos solo si el último valor parece un índice (nivel), no %
+                if data and isinstance(data[-1][1], (int, float)) and data[-1][1] > 1000:
+                    return sid, data
+            except Exception:
+                continue
+        return None, None
+
+    sid, data = buscar(True)
+    if not data:
+        sid, data = buscar(False)
+    return sid, data
 
 def inflacion():
-    serie = _id_ipc()
-    data = get(f"{SERIES_API}/series/",
-               params={"ids": serie, "format": "json", "last": 15})["data"]
+    serie, data = _serie_ipc_indice()
+    if not data:
+        return {"error": "no se pudo resolver la serie de IPC nivel general (índice)"}
     idx = {f[:7]: v for f, v in data}
     fechas = sorted(idx); ult = fechas[-1]; y, m = map(int, ult.split("-"))
     var = lambda a, b: round((idx[b]/idx[a]-1)*100, 1) if a in idx and b in idx else None
