@@ -39,55 +39,30 @@ def get(url, **kw):
 
 
 # ===========================================================================
-# 🟢 OFICIAL — INDEC (IPC) vía API de Series de datos.gob.ar
+# 🟢 OFICIAL — Inflación (IPC INDEC) vía argentinadatos (dato oficial, limpio)
 # ===========================================================================
-SERIES_API = "https://apis.datos.gob.ar/series/api"
-
-def _serie_ipc_indice():
-    """Resuelve la serie de IPC nivel general que devuelve NIVELES de índice
-    (valores grandes), descartando las series de variaciones. Prueba primero
-    'nacional' y, si no hay, cualquier 'nivel general'."""
-    try:
-        cands = get(f"{SERIES_API}/search/",
-                    params={"q": "indice precios consumidor nivel general mensual",
-                            "limit": 40}).get("data", [])
-    except Exception:
-        cands = []
-
-    def buscar(requiere_nacional):
-        for s in cands:
-            sid = s.get("id")
-            desc = (s.get("description", "") + " " + s.get("title", "")).lower()
-            if "nivel general" not in desc:
-                continue
-            if requiere_nacional and "nacional" not in desc:
-                continue
-            try:
-                data = get(f"{SERIES_API}/series/",
-                           params={"ids": sid, "format": "json", "last": 15})["data"]
-                # aceptamos solo si el último valor parece un índice (nivel), no %
-                if data and isinstance(data[-1][1], (int, float)) and data[-1][1] > 1000:
-                    return sid, data
-            except Exception:
-                continue
-        return None, None
-
-    sid, data = buscar(True)
-    if not data:
-        sid, data = buscar(False)
-    return sid, data
+AD_IND = "https://api.argentinadatos.com/v1/finanzas/indices"
 
 def inflacion():
-    serie, data = _serie_ipc_indice()
-    if not data:
-        return {"error": "no se pudo resolver la serie de IPC nivel general (índice)"}
-    idx = {f[:7]: v for f, v in data}
-    fechas = sorted(idx); ult = fechas[-1]; y, m = map(int, ult.split("-"))
-    var = lambda a, b: round((idx[b]/idx[a]-1)*100, 1) if a in idx and b in idx else None
-    return {"ultimo_mes": ult, "mensual": var(fechas[-2], ult),
-            "interanual": var(f"{y-1:04d}-{m:02d}", ult),
-            "acum_anio": var(f"{y-1:04d}-12", ult),
-            "indice": round(idx[ult], 4), "serie_id": serie}
+    mens = get(f"{AD_IND}/inflacion")              # mensual %: [{fecha, valor}]
+    try:
+        inter = get(f"{AD_IND}/inflacionInteranual")
+    except Exception:
+        inter = []
+    if not mens:
+        return {"error": "sin datos de inflación (argentinadatos)"}
+    ult = mens[-1]
+    ultimo_mes = ult["fecha"][:7]
+    anio = ultimo_mes[:4]
+    factor = 1.0
+    for r in mens:                                  # acumulado del año (compuesto)
+        if r["fecha"][:4] == anio and isinstance(r.get("valor"), (int, float)):
+            factor *= 1 + r["valor"] / 100
+    return {"ultimo_mes": ultimo_mes,
+            "mensual": ult.get("valor"),
+            "interanual": inter[-1].get("valor") if inter else None,
+            "acum_anio": round((factor - 1) * 100, 1),
+            "fuente": "INDEC vía argentinadatos"}
 
 
 # ===========================================================================
