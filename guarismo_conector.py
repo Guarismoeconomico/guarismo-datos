@@ -108,13 +108,31 @@ def bcra_dolar_oficial():
 CASAS = {"oficial":"Oficial","blue":"Blue","bolsa":"MEP","contadoconliqui":"CCL",
          "mayorista":"Mayorista","tarjeta":"Tarjeta","cripto":"Cripto"}
 
+def _prev(bucket):
+    """Lee el snapshot anterior de un bucket desde Supabase (para calcular variación)."""
+    import os
+    url, key = os.getenv("SUPABASE_URL"), os.getenv("SUPABASE_KEY")
+    if not (url and key):
+        return {}
+    try:
+        j = get(f"{url}/rest/v1/guarismo_latest?id=eq.{bucket}&select=data",
+                headers={"apikey": key, "Authorization": f"Bearer {key}"})
+        return (j[0]["data"] if j else {}) or {}
+    except Exception:
+        return {}
+
 def dolares():
+    prev = _prev("agregador").get("dolares", {}) or {}
     out = {}
     for d in get("https://dolarapi.com/v1/dolares"):
         casa = d.get("casa")
         if casa in CASAS:
+            venta = d.get("venta")
+            pv = (prev.get(casa) or {}).get("venta")
+            delta = round((venta/pv - 1)*100, 1) if pv and venta else None
             out[casa] = {"nombre": CASAS[casa], "compra": d.get("compra"),
-                         "venta": d.get("venta"), "fecha": d.get("fechaActualizacion")}
+                         "venta": venta, "fecha": d.get("fechaActualizacion"),
+                         "d": delta}
     return out
 
 def riesgo_pais():
