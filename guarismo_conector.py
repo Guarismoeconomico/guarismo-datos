@@ -76,8 +76,7 @@ BCRA_MATCH = {
     "reservas_musd":   ["reservas", "internacionales"],
     "base_monetaria":  ["base", "monetaria"],
     "tasa_badlar":     ["badlar"],
-    "tasa_plazo_fijo": ["plazo", "fijo"],
-    "tasa_politica":   ["política", "monetaria"],
+    "tasa_plazo_fijo": ["depósitos", "30 días"],
     "tasa_tamar":      ["tamar"],
     "cer":             ["coeficiente", "estabilización"],
     "uva":             ["valor", "adquisitivo"],
@@ -89,7 +88,7 @@ def bcra_monetarias():
     out = {}
     for clave, palabras in BCRA_MATCH.items():
         match = next(
-            ({"valor": v.get("valor"), "fecha": v.get("fecha"),
+            ({"valor": v.get("ultValorInformado"), "fecha": v.get("ultFechaInformada"),
               "desc": v.get("descripcion")}
              for v in variables
              if all(p in v.get("descripcion","").lower() for p in palabras)),
