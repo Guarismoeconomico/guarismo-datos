@@ -79,6 +79,8 @@ BCRA_MATCH = {
     "tasa_plazo_fijo": ["plazo", "fijo"],
     "tasa_politica":   ["política", "monetaria"],
     "tasa_tamar":      ["tamar"],
+    "cer":             ["coeficiente", "estabilización"],
+    "uva":             ["valor", "adquisitivo"],
 }
 
 def bcra_monetarias():
