@@ -78,6 +78,7 @@ BCRA_MATCH = {
     "tasa_badlar":     ["badlar"],
     "tasa_plazo_fijo": ["depósitos", "30 días"],
     "tasa_tamar":      ["tamar"],
+    "tasa_prestamos":  ["préstamos", "personales"],
     "cer":             ["coeficiente", "estabilización"],
     "uva":             ["valor", "adquisitivo"],
 }
