@@ -76,9 +76,9 @@ BCRA_MATCH = {
     "reservas_musd":   ["reservas", "internacionales"],
     "base_monetaria":  ["base", "monetaria"],
     "tasa_badlar":     ["badlar"],
-    "tasa_plazo_fijo": ["depósitos", "30 días"],
+    "tasa_plazo_fijo": ["plazo", "fijo"],
+    "tasa_politica":   ["política", "monetaria"],
     "tasa_tamar":      ["tamar"],
-    "tasa_prestamos":  ["préstamos", "personales"],
     "cer":             ["coeficiente", "estabilización"],
     "uva":             ["valor", "adquisitivo"],
 }
@@ -89,7 +89,7 @@ def bcra_monetarias():
     out = {}
     for clave, palabras in BCRA_MATCH.items():
         match = next(
-            ({"valor": v.get("ultValorInformado"), "fecha": v.get("ultFechaInformada"),
+            ({"valor": v.get("valor"), "fecha": v.get("fecha"),
               "desc": v.get("descripcion")}
              for v in variables
              if all(p in v.get("descripcion","").lower() for p in palabras)),
@@ -130,26 +130,125 @@ def _prev(bucket):
     except Exception:
         return {}
 
+# --- Cierre anterior y estado del mercado ------------------------------------
+# Problema que resuelve: un sábado, dolarapi devuelve el cierre del viernes.
+# Antes comparábamos ese valor contra "el snapshot de hace 30 min" (que era el
+# mismo número) → 0%, y la app afirmaba "el dólar no se movió" cuando la verdad
+# era "el mercado está cerrado". Dos cosas muy distintas.
+#
+# Ahora: la variación se calcula SIEMPRE contra el cierre del último día hábil.
+#   · mercado abierto → valor de ahora vs. cierre anterior  (variación de hoy)
+#   · mercado cerrado → último cierre vs. cierre previo     (cómo cerró)
+#
+# argentinadatos rellena los días no hábiles repitiendo el valor del último día
+# con operatoria. Eso nos deja detectar los cierres reales SIN mantener un
+# calendario de feriados: colapsamos las repeticiones y lo que queda son los
+# días que efectivamente operaron.
+
+HORA_AR = -3                              # Argentina = UTC-3 (Actions corre en UTC)
+MERCADO_DESDE, MERCADO_HASTA = 10, 18     # horario aproximado de operatoria
+
+def _ahora_ar():
+    return dt.datetime.utcnow() + dt.timedelta(hours=HORA_AR)
+
+def _cierres_habiles(rows, hasta=None, n=2, tope=8):
+    """Los últimos n cierres de días HÁBILES: [{valor, fecha}, ...] (más nuevo primero).
+    Los días sin operatoria repiten el valor del último hábil → los colapsamos."""
+    pts = [r for r in rows if r.get("venta") is not None and r.get("fecha")]
+    if hasta:
+        pts = [r for r in pts if r["fecha"] < hasta]
+    out, i, pasos, lim = [], len(pts) - 1, 0, tope * n
+    while i >= 0 and len(out) < n and pasos < lim:
+        j = i
+        while j > 0 and pts[j]["venta"] == pts[j-1]["venta"] and pasos < lim:
+            j -= 1; pasos += 1
+        out.append({"valor": pts[j]["venta"], "fecha": pts[j]["fecha"]})
+        i = j - 1
+    return out
+
+_CACHE = {}
+
+def _dolarapi():
+    """Bajada única de dolarapi, reusada por dolares() y mercado_estado()."""
+    if "dolarapi" not in _CACHE:
+        _CACHE["dolarapi"] = get("https://dolarapi.com/v1/dolares")
+    return _CACHE["dolarapi"]
+
+def mercado_estado():
+    """¿El mercado local está operando ahora? Tres chequeos:
+      1. Día hábil (lun-vie)      → atrapa fines de semana.
+      2. Horario de operatoria.
+      3. La fecha del dato de dolarapi es de hoy → atrapa FERIADOS, que no
+         podemos deducir de un calendario. Si el dato es de ayer, no operó.
+    Cripto (USDT) opera 24/7: la app no le aplica este estado."""
+    ahora = _ahora_ar()
+    hoy = ahora.date().isoformat()
+    habil = ahora.weekday() < 5
+    en_horario = MERCADO_DESDE <= ahora.hour < MERCADO_HASTA
+    dato_de_hoy = None
+    try:
+        f = next((d.get("fechaActualizacion") for d in _dolarapi()
+                  if d.get("casa") == "blue"), None)
+        if f:
+            dato_de_hoy = (f[:10] == hoy)
+    except Exception:
+        pass
+    abierto = bool(habil and en_horario and (dato_de_hoy is not False))
+    return {"abierto": abierto, "hoy": hoy, "habil": habil,
+            "en_horario": en_horario, "dato_de_hoy": dato_de_hoy,
+            "hora_ar": ahora.strftime("%H:%M")}
+
 def dolares():
-    prev = _prev("agregador").get("dolares", {}) or {}
+    """Cotizaciones + variación contra el cierre del último día hábil.
+    Devuelve por casa: venta, compra, d (%), cierre (valor y fecha de referencia).
+    Si no se puede calcular la variación, d queda en None → la app no muestra
+    nada (nunca un 0% inventado)."""
+    est = mercado_estado()
+    hoy = est["hoy"]
     out = {}
-    for d in get("https://dolarapi.com/v1/dolares"):
+    for d in _dolarapi():
         casa = d.get("casa")
-        if casa in CASAS:
-            venta = d.get("venta")
-            pv = (prev.get(casa) or {}).get("venta")
-            delta = round((venta/pv - 1)*100, 1) if pv and venta else None
-            out[casa] = {"nombre": CASAS[casa], "compra": d.get("compra"),
-                         "venta": venta, "fecha": d.get("fechaActualizacion"),
-                         "d": delta}
+        if casa not in CASAS:
+            continue
+        venta = d.get("venta")
+        delta = ref = None
+        # Cripto opera 24/7: no tiene "cierre". Se compara contra el día anterior.
+        try:
+            rows = get(f"{AD_COT}/dolares/{casa}")
+            cs = _cierres_habiles(rows, hasta=hoy, n=2)
+            if est["abierto"] and cs and venta:
+                # Mercado abierto → cuánto se movió HOY respecto del cierre anterior.
+                delta = round((venta / cs[0]["valor"] - 1) * 100, 2)
+                ref = cs[0]
+            elif len(cs) >= 2 and cs[1]["valor"]:
+                # Mercado cerrado → cómo cerró el último día hábil.
+                delta = round((cs[0]["valor"] / cs[1]["valor"] - 1) * 100, 2)
+                ref = cs[0]
+        except Exception as e:
+            print(f"   [cierre {casa}] {e}")
+        out[casa] = {"nombre": CASAS[casa], "compra": d.get("compra"),
+                     "venta": venta, "fecha": d.get("fechaActualizacion"),
+                     "d": delta,
+                     "cierre_fecha": (ref or {}).get("fecha"),
+                     "cierre_valor": (ref or {}).get("valor")}
     return out
 
 def riesgo_pais():
+    """Riesgo país + variación contra el último valor distinto (mismo criterio:
+    la serie repite los días sin rueda)."""
     d = get("https://api.argentinadatos.com/v1/finanzas/indices/riesgo-pais/ultimo")
-    v = d.get("valor")
-    pv = (_prev("agregador").get("riesgo_pais") or {}).get("valor")
-    delta = round((v/pv - 1)*100, 1) if (pv and v) else None
-    return {"valor": v, "fecha": d.get("fecha"), "d": delta}
+    v, f = d.get("valor"), d.get("fecha")
+    delta = None
+    try:
+        rows = get(f"{AD_IND}/riesgo-pais")
+        pts = [r for r in rows if r.get("valor") is not None and r.get("fecha")]
+        prev = next((r["valor"] for r in reversed(pts)
+                     if r["fecha"] < (f or "9999") and r["valor"] != v), None)
+        if prev and v:
+            delta = round((v / prev - 1) * 100, 2)
+    except Exception as e:
+        print(f"   [riesgo prev] {e}")
+    return {"valor": v, "fecha": f, "d": delta}
 
 def plazos_fijos():
     try:
@@ -277,6 +376,7 @@ BLOQUES = {
         ("dolar_oficial", "BCRA · dólar oficial", "bcra_dolar_oficial")]),
     "agregador": ("🟡 API libre; revisar términos para uso comercial", [
         ("dolares", "dolarapi · dólar", "dolares"),
+        ("mercado", "estado del mercado (abierto/cerrado)", "mercado_estado"),
         ("riesgo_pais", "argentinadatos · riesgo país", "riesgo_pais"),
         ("plazos_fijos", "argentinadatos · plazos fijos", "plazos_fijos")]),
     "mercado":   ("🔴 gratis de bajar, LICENCIADO para redistribución comercial", [
