@@ -76,9 +76,9 @@ BCRA_MATCH = {
     "reservas_musd":   ["reservas", "internacionales"],
     "base_monetaria":  ["base", "monetaria"],
     "tasa_badlar":     ["badlar"],
-    "tasa_plazo_fijo": ["plazo", "fijo"],
-    "tasa_politica":   ["política", "monetaria"],
+    "tasa_plazo_fijo": ["depósitos", "30 días"],
     "tasa_tamar":      ["tamar"],
+    "tasa_prestamos":  ["préstamos", "personales"],
     "cer":             ["coeficiente", "estabilización"],
     "uva":             ["valor", "adquisitivo"],
 }
@@ -89,7 +89,7 @@ def bcra_monetarias():
     out = {}
     for clave, palabras in BCRA_MATCH.items():
         match = next(
-            ({"valor": v.get("valor"), "fecha": v.get("fecha"),
+            ({"valor": v.get("ultValorInformado"), "fecha": v.get("ultFechaInformada"),
               "desc": v.get("descripcion")}
              for v in variables
              if all(p in v.get("descripcion","").lower() for p in palabras)),
@@ -149,7 +149,7 @@ HORA_AR = -3                              # Argentina = UTC-3 (Actions corre en 
 MERCADO_DESDE, MERCADO_HASTA = 10, 18     # horario aproximado de operatoria
 
 def _ahora_ar():
-    return dt.datetime.utcnow() + dt.timedelta(hours=HORA_AR)
+    return dt.datetime.now(dt.timezone.utc) + dt.timedelta(hours=HORA_AR)
 
 def _cierres_habiles(rows, hasta=None, n=2, tope=8):
     """Los últimos n cierres de días HÁBILES: [{valor, fecha}, ...] (más nuevo primero).
@@ -200,7 +200,7 @@ def mercado_estado():
 
 def dolares():
     """Cotizaciones + variación contra el cierre del último día hábil.
-    Devuelve por casa: venta, compra, d (%), cierre (valor y fecha de referencia).
+    Por casa: venta, compra, d (%), y la fecha/valor del cierre de referencia.
     Si no se puede calcular la variación, d queda en None → la app no muestra
     nada (nunca un 0% inventado)."""
     est = mercado_estado()
@@ -212,11 +212,9 @@ def dolares():
             continue
         venta = d.get("venta")
         delta = ref = None
-        # Cripto opera 24/7: no tiene "cierre". Se compara contra el día anterior.
         try:
-            rows = get(f"{AD_COT}/dolares/{casa}")
-            cs = _cierres_habiles(rows, hasta=hoy, n=2)
-            if est["abierto"] and cs and venta:
+            cs = _cierres_habiles(get(f"{AD_COT}/dolares/{casa}"), hasta=hoy, n=2)
+            if est["abierto"] and cs and venta and cs[0]["valor"]:
                 # Mercado abierto → cuánto se movió HOY respecto del cierre anterior.
                 delta = round((venta / cs[0]["valor"] - 1) * 100, 2)
                 ref = cs[0]
@@ -234,8 +232,8 @@ def dolares():
     return out
 
 def riesgo_pais():
-    """Riesgo país + variación contra el último valor distinto (mismo criterio:
-    la serie repite los días sin rueda)."""
+    """Riesgo país + variación contra el último valor distinto de la serie
+    (mismo criterio que el dólar: los días sin rueda repiten el valor)."""
     d = get("https://api.argentinadatos.com/v1/finanzas/indices/riesgo-pais/ultimo")
     v, f = d.get("valor"), d.get("fecha")
     delta = None
@@ -524,7 +522,7 @@ def _dolar_actual(r):
 
 def _tasa_actual(r):
     bm = (r.get("oficial", {}) or {}).get("bcra_monetarias") or {}
-    for k in ("tasa_tamar", "tasa_politica", "tasa_badlar"):
+    for k in ("tasa_tamar", "tasa_badlar"):
         v = (bm.get(k) or {}).get("valor") if isinstance(bm.get(k), dict) else None
         if v is not None:
             return v
