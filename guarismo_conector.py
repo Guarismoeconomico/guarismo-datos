@@ -151,20 +151,31 @@ MERCADO_DESDE, MERCADO_HASTA = 10, 18     # horario aproximado de operatoria
 def _ahora_ar():
     return dt.datetime.now(dt.timezone.utc) + dt.timedelta(hours=HORA_AR)
 
-def _cierres_habiles(rows, hasta=None, n=2, tope=8):
-    """Los últimos n cierres de días HÁBILES: [{valor, fecha}, ...] (más nuevo primero).
-    Los días sin operatoria repiten el valor del último hábil → los colapsamos."""
+def _es_finde(f):
+    try:
+        return dt.date.fromisoformat(f[:10]).weekday() >= 5
+    except Exception:
+        return False
+
+def _cierres_habiles(rows, hasta=None, n=2, cripto=False):
+    """Los últimos n cierres: [{valor, fecha}, ...] (el más nuevo primero).
+
+    Excluimos sábados y domingos por CALENDARIO, no por repetición de valores.
+    (Intentar deducir los días hábiles viendo qué valores se repiten falla
+    cuando el dólar simplemente no se movió: no se puede distinguir "no operó"
+    de "operó y quedó igual".)
+
+    Los feriados quedan dentro de la lista, pero no molestan: la fuente los
+    rellena repitiendo el valor del último día con rueda, así que comparar
+    contra un feriado da el mismo número que comparar contra la rueda anterior.
+
+    cripto=True → USDT opera 24/7: no tiene fin de semana ni cierre."""
     pts = [r for r in rows if r.get("venta") is not None and r.get("fecha")]
     if hasta:
         pts = [r for r in pts if r["fecha"] < hasta]
-    out, i, pasos, lim = [], len(pts) - 1, 0, tope * n
-    while i >= 0 and len(out) < n and pasos < lim:
-        j = i
-        while j > 0 and pts[j]["venta"] == pts[j-1]["venta"] and pasos < lim:
-            j -= 1; pasos += 1
-        out.append({"valor": pts[j]["venta"], "fecha": pts[j]["fecha"]})
-        i = j - 1
-    return out
+    if not cripto:
+        pts = [r for r in pts if not _es_finde(r["fecha"])]
+    return [{"valor": r["venta"], "fecha": r["fecha"]} for r in pts[-n:]][::-1]
 
 _CACHE = {}
 
@@ -212,9 +223,11 @@ def dolares():
             continue
         venta = d.get("venta")
         delta = ref = None
+        es24 = (casa == "cripto")          # USDT opera 24/7: nunca "cierra"
         try:
-            cs = _cierres_habiles(get(f"{AD_COT}/dolares/{casa}"), hasta=hoy, n=2)
-            if est["abierto"] and cs and venta and cs[0]["valor"]:
+            cs = _cierres_habiles(get(f"{AD_COT}/dolares/{casa}"),
+                                  hasta=hoy, n=2, cripto=es24)
+            if (est["abierto"] or es24) and cs and venta and cs[0]["valor"]:
                 # Mercado abierto → cuánto se movió HOY respecto del cierre anterior.
                 delta = round((venta / cs[0]["valor"] - 1) * 100, 2)
                 ref = cs[0]
