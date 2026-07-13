@@ -2,7 +2,7 @@ name: Datos intradia (dolar + mercado)
 
 on:
   schedule:
-    - cron: "*/30 14-20 * * 1-5"
+    - cron: "8,38 13-20 * * 1-5"
   workflow_dispatch: {}
 
 jobs:
