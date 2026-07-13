@@ -23,6 +23,12 @@ Uso:
     python guarismo_conector.py
 
 Ninguna fuente pide API key.
+
+NOTA SOBRE EL RELOJ (13 jul 2026)
+    El cron de GitHub Actions NO es confiable: descarta corridas en silencio y
+    las demora hasta 6 horas. El reloj real vive en cron-job.org, que dispara
+    los workflows vía la API de GitHub (workflow_dispatch). El bloque schedule:
+    de los YAML queda como respaldo, pero no se cuenta con él.
 """
 
 import json, sys, datetime as dt
@@ -96,8 +102,19 @@ def bcra_monetarias():
             None)
         if match:
             pv = (prev.get(clave) or {}).get("valor")
-            v = match.get("valor")
-            match["d"] = round((v/pv - 1)*100, 1) if (pv and v) else None
+            pf = (prev.get(clave) or {}).get("fecha")
+            v  = match.get("valor")
+            # Solo hay variación si el BCRA publicó una FECHA NUEVA.
+            #
+            # Antes comparábamos valor contra valor: si el dato no se había
+            # actualizado (mismo día, o el pipeline caído), el número era
+            # idéntico → 0%, y la app afirmaba "las reservas no cambiaron"
+            # cuando la verdad era "todavía no hay dato nuevo". Es el mismo
+            # error conceptual que el del dólar el fin de semana.
+            #
+            # Sin fecha nueva → d = None → la app no muestra variación.
+            nueva = bool(pf and match.get("fecha") and match["fecha"] != pf)
+            match["d"] = round((v/pv - 1)*100, 1) if (pv and v and nueva) else None
         out[clave] = match
     return out
 
@@ -137,13 +154,13 @@ def _prev(bucket):
 # era "el mercado está cerrado". Dos cosas muy distintas.
 #
 # Ahora: la variación se calcula SIEMPRE contra el cierre del último día hábil.
-#   · mercado abierto → valor de ahora vs. cierre anterior  (variación de hoy)
-#   · mercado cerrado → último cierre vs. cierre previo     (cómo cerró)
+#   · mercado abierto              → valor de ahora vs. cierre anterior
+#   · cerrado, pero hoy SÍ operó   → cierre de hoy vs. cierre anterior
+#   · cerrado y hoy no operó       → último cierre vs. cierre previo
 #
 # argentinadatos rellena los días no hábiles repitiendo el valor del último día
 # con operatoria. Eso nos deja detectar los cierres reales SIN mantener un
-# calendario de feriados: colapsamos las repeticiones y lo que queda son los
-# días que efectivamente operaron.
+# calendario de feriados: los feriados dan el mismo número que la rueda anterior.
 
 HORA_AR = -3                              # Argentina = UTC-3 (Actions corre en UTC)
 MERCADO_DESDE, MERCADO_HASTA = 10, 18     # horario aproximado de operatoria
@@ -216,6 +233,10 @@ def dolares():
     nada (nunca un 0% inventado)."""
     est = mercado_estado()
     hoy = est["hoy"]
+    # ¿Hoy fue un día de rueda que ya cerró? (lun-vie, fuera de horario, con
+    # dato de hoy). En ese caso el "último cierre" es el de HOY, no el del
+    # viernes pasado: los valores que mostramos son los de hoy.
+    cerro_hoy = bool(est["habil"] and est["dato_de_hoy"] and not est["abierto"])
     out = {}
     for d in _dolarapi():
         casa = d.get("casa")
@@ -231,8 +252,19 @@ def dolares():
                 # Mercado abierto → cuánto se movió HOY respecto del cierre anterior.
                 delta = round((venta / cs[0]["valor"] - 1) * 100, 2)
                 ref = cs[0]
+            elif cerro_hoy and cs and venta and cs[0]["valor"]:
+                # Cerró hoy → el último cierre es el de HOY. Comparamos ese
+                # cierre contra el de la rueda anterior.
+                #
+                # Antes este caso caía en la rama de abajo y reportaba el cierre
+                # del VIERNES, mientras la app mostraba los valores de hoy:
+                # "Mercado cerrado · valores del cierre del 10 jul" con los
+                # números del 13. El valor y su fecha decían cosas distintas.
+                delta = round((venta / cs[0]["valor"] - 1) * 100, 2)
+                ref = {"fecha": hoy, "valor": venta}
             elif len(cs) >= 2 and cs[1]["valor"]:
-                # Mercado cerrado → cómo cerró el último día hábil.
+                # Cerrado y hoy no operó (finde o feriado) → cómo cerró el
+                # último día hábil.
                 delta = round((cs[0]["valor"] / cs[1]["valor"] - 1) * 100, 2)
                 ref = cs[0]
         except Exception as e:
@@ -750,7 +782,7 @@ def detectar_breaking(r, rem_data):
                 "A3 · BCRA", prioridad=3, metric="dolar",
                 valor=may, valencia="neutro"))
 
-    # 3) UMBRAL — Riesgo país cruza un múltiplo de 50 pb. valencia: menos es mejor.
+    # 4) UMBRAL — Riesgo país cruza un múltiplo de 50 pb. valencia: menos es mejor.
     rp = ag.get("riesgo_pais")
     if isinstance(rp, dict) and rp.get("valor") is not None:
         prev_rp = (_prev("agregador").get("riesgo_pais") or {}).get("valor")
