@@ -13,7 +13,7 @@ Cada fuente está etiquetada por "bucket" según su situación legal:
   🔴 MERCADO       Gratis de BAJAR, pero es market data LICENCIADA: su
                    redistribución comercial requiere licencia (BYMA/A3/NYSE/CME).
                    Sirve para prototipo/uso propio; para el producto pago hay
-                   que licenciar. yfinance (Merval, ADRs, metales), CoinGecko.
+                   que licenciar. yfinance (Merval, metales), CoinGecko.
 
 Salida: guarismo_datos.json
 
@@ -29,6 +29,11 @@ NOTA SOBRE EL RELOJ (13 jul 2026)
     las demora hasta 6 horas. El reloj real vive en cron-job.org, que dispara
     los workflows vía la API de GitHub (workflow_dispatch). El bloque schedule:
     de los YAML queda como respaldo, pero no se cuenta con él.
+
+    El job intradía corre 24/7 (*/30 * * * *): cripto y commodities operan casi
+    sin pausa, y con la ventana vieja (10-18, lun-vie) quedaban congelados toda
+    la noche y el fin de semana. El dólar de noche reescribe el mismo cierre,
+    que es lo correcto (la lógica de mercado abierto/cerrado ya lo maneja).
 """
 
 import json, sys, datetime as dt
@@ -306,7 +311,7 @@ def plazos_fijos():
 
 
 # ===========================================================================
-# 🔴 MERCADO — CoinGecko (cripto) + yfinance (Merval, ADRs, metales)
+# 🔴 MERCADO — CoinGecko (cripto) + yfinance (Merval, metales, petróleo)
 # ===========================================================================
 def cripto():
     d = get("https://api.coingecko.com/api/v3/simple/price",
@@ -315,15 +320,23 @@ def cripto():
     return {k.upper(): {"usd": v["usd"], "var_24h": round(v.get("usd_24h_change", 0), 2)}
             for k, v in {"btc": d["bitcoin"], "eth": d["ethereum"]}.items()}
 
-# Tickers Yahoo Finance. ADRs cotizan en NYSE; Merval = ^MERV;
-# metales/petróleo = futuros; granos Chicago (CME) como referencia internacional.
+# --- Tickers de Yahoo Finance -----------------------------------------------
+# SOLO lo que la app muestra hoy. Antes se bajaban 20 tickers (2 índices, 11
+# ADRs, 4 metales/oil, 3 granos) y la app usaba 4: los otros 16 se bajaban y se
+# tiraban. Con el intradía ahora corriendo 24/7, eso triplicaba las llamadas a
+# Yahoo sin ningún beneficio — y Yahoo limita por IP.
+#
+# Los apagados quedan acá comentados: cuando entre IOL (acciones/bonos) o se
+# active el bloque de granos, se descomentan y listo.
 YF = {
-    "indices":     {"Merval": "^MERV", "S&P 500": "^GSPC"},
-    "adrs":        {"YPF":"YPF","GGAL":"GGAL","PAM":"PAM","BMA":"BMA","CEPU":"CEPU",
-                    "TGS":"TGS","EDN":"EDN","LOMA":"LOMA","CRESY":"CRESY",
-                    "SUPV":"SUPV","BBAR":"BBAR"},
-    "metales_oil": {"Oro":"GC=F","Plata":"SI=F","Brent":"BZ=F","WTI":"CL=F"},
-    "granos_cme":  {"Soja":"ZS=F","Maíz":"ZC=F","Trigo":"ZW=F"},
+    "indices":     {"Merval": "^MERV"},
+    "metales_oil": {"Oro": "GC=F", "Plata": "SI=F", "Brent": "BZ=F"},
+    # "adrs":       {"YPF":"YPF","GGAL":"GGAL","PAM":"PAM","BMA":"BMA","CEPU":"CEPU",
+    #                "TGS":"TGS","EDN":"EDN","LOMA":"LOMA","CRESY":"CRESY",
+    #                "SUPV":"SUPV","BBAR":"BBAR"},          # v1.1 — hoy la app no los muestra
+    # "granos_cme": {"Soja":"ZS=F","Maíz":"ZC=F","Trigo":"ZW=F"},  # commoditiesLocales=false
+    # "indices":    {"S&P 500": "^GSPC"},                   # no se muestra
+    # "metales_oil":{"WTI": "CL=F"},                        # no se muestra
 }
 
 # --- BYMA local (acciones + bonos) vía data912 — gratis, sin credenciales ----
@@ -346,6 +359,26 @@ def mercado_local():
     return {"acciones": panel("arg_stocks"), "bonos": panel("arg_bonds")}
 
 def mercado_yf():
+    """Precio y variación contra el CIERRE DE LA SESIÓN ANTERIOR.
+
+    🔴 BUG QUE ESTO ARREGLA (13-14 jul 2026)
+    Antes la variación se calculaba contra la APERTURA del día:
+        var = (close / open - 1) * 100
+    y el comentario decía "como lo muestran Google/Yahoo". Está al revés: Google,
+    Yahoo y cualquier terminal muestran la variación contra el CIERRE ANTERIOR.
+
+    Con mercados casi-24h el error es grave. El Brent abre ~19:00 (hora AR) y
+    cierra ~18:00 del día siguiente: su "día" de trading no es el día calendario.
+    El 13 de julio el Brent subió 9% (76,0 → 83,1) — todo en el gap entre
+    sesiones. Con close/open, ese 9% se borraba entero: la app mostró primero el
+    precio de AYER (creyendo que era de hoy) y después el de hoy con un ▼0,2%.
+    Un número creíble, fresco a la vista, y falso.
+
+    Ahora: close[-1] / close[-2]. Si hay una sola sesión, no hay variación
+    (var_pct = None) → la app no muestra nada. Nunca un porcentaje inventado.
+
+    Se agrega 'fecha': la fecha de la barra que estamos mostrando. Sirve para
+    detectar desde afuera si Yahoo nos está devolviendo un dato viejo."""
     try:
         import yfinance as yf
     except ImportError:
@@ -355,23 +388,26 @@ def mercado_yf():
         out[grupo] = {}
         for nombre, ticker in mapa.items():
             try:
-                # Traemos Open y Close de los últimos días.
                 hist = yf.Ticker(ticker).history(period="5d")[["Open", "Close"]].dropna()
-                if len(hist) >= 1:
-                    ult = float(hist["Close"].iloc[-1])          # precio más reciente
-                    apertura = float(hist["Open"].iloc[-1])      # apertura del día en curso
-                    # Variación INTRADÍA (como la muestran Google/Yahoo): hoy vs apertura.
-                    # Si no hay apertura válida, caemos a día-contra-día (cierre anterior).
-                    if apertura and apertura > 0:
-                        var = (ult / apertura - 1) * 100
-                    elif len(hist) >= 2:
-                        var = (ult / float(hist["Close"].iloc[-2]) - 1) * 100
-                    else:
-                        var = None
-                    out[grupo][nombre] = {"precio": round(ult, 2),
-                                          "var_pct": round(var, 2) if var is not None else None}
-            except Exception:
+                if len(hist) >= 2:
+                    ult  = float(hist["Close"].iloc[-1])   # sesión en curso (o la última)
+                    prev = float(hist["Close"].iloc[-2])   # cierre de la sesión anterior
+                    var = (ult / prev - 1) * 100 if prev else None
+                    out[grupo][nombre] = {
+                        "precio": round(ult, 2),
+                        "var_pct": round(var, 2) if var is not None else None,
+                        "fecha": str(hist.index[-1].date()),
+                        "cierre_prev": round(prev, 2)}
+                elif len(hist) == 1:
+                    # Una sola sesión: no hay contra qué comparar. Preferimos no
+                    # mostrar variación antes que mostrar una inventada.
+                    ult = float(hist["Close"].iloc[-1])
+                    out[grupo][nombre] = {
+                        "precio": round(ult, 2), "var_pct": None,
+                        "fecha": str(hist.index[-1].date())}
+            except Exception as e:
                 out[grupo][nombre] = None
+                print(f"   [yf {nombre}] {e}")
     return out
 
 
@@ -410,7 +446,7 @@ def to_supabase(datos):
 
 # Qué buckets corre cada job (por cadencia):
 #   diario   → oficial      (BCRA diario, INDEC mensual)
-#   intradia → agregador + mercado (dólar/riesgo/cripto/acciones)
+#   intradia → agregador + mercado (dólar/riesgo/cripto/commodities)
 #   todo     → todo (default)
 BLOQUES = {
     "oficial":   ("🟢 datos oficiales, redistribuibles", [
@@ -425,7 +461,7 @@ BLOQUES = {
     "mercado":   ("🔴 gratis de bajar, LICENCIADO para redistribución comercial", [
         ("local_data912", "data912 · acciones/bonos BYMA", "mercado_local"),
         ("cripto", "CoinGecko · BTC/ETH", "cripto"),
-        ("yfinance", "yfinance · Merval/ADRs/metales", "mercado_yf")]),
+        ("yfinance", "yfinance · Merval/metales", "mercado_yf")]),
 }
 JOBS = {"diario": ["oficial"], "intradia": ["agregador", "mercado"],
         "todo": ["oficial", "agregador", "mercado"]}
