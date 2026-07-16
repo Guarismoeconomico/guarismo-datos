@@ -1,0 +1,44 @@
+name: Guarismo Telegram
+
+# Se dispara a mano (workflow_dispatch) desde la pestaña Actions, o por
+# cron-job.org más adelante. Elegís el tipo de posteo y si es prueba o real.
+on:
+  workflow_dispatch:
+    inputs:
+      tipo:
+        description: "Tipo de posteo"
+        required: true
+        default: "cierre"
+        type: choice
+        options:
+          - apertura
+          - media
+          - cierre
+      dry:
+        description: "Prueba (no publica, solo muestra el texto)"
+        required: true
+        default: true
+        type: boolean
+
+jobs:
+  publicar:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Traer el repo
+        uses: actions/checkout@v4
+
+      - name: Instalar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Instalar dependencias
+        run: pip install requests
+
+      - name: Ejecutar publicador
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          DRY: ${{ inputs.dry && '1' || '0' }}
+        run: python guarismo_telegram.py ${{ inputs.tipo }}
