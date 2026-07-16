@@ -77,6 +77,16 @@ def _money(v, dec=0):
     return f"${s}"
 
 
+def _tasa(v):
+    """Redondea la tasa a 1 decimal, como la app. 21.875 -> '21,9'."""
+    if v is None:
+        return None
+    try:
+        return f"{float(v):.1f}".replace(".", ",")
+    except (TypeError, ValueError):
+        return None
+
+
 def _pct(d):
     """0.3 -> '▲0,3%' | -0.3 -> '▼0,3%' | 0 -> '—' | None -> '' (sin dato)."""
     if d is None:
@@ -167,80 +177,87 @@ def armar_texto(tipo):
         d = dolares.get(casa) or {}
         return d.get("venta"), (None if sin_deltas else d.get("d"))
 
-    # --- Encabezado ----------------------------------------------------------
-    titulo = TITULOS.get(tipo, "Guarismo")
-    hora = ahora.strftime("%H:%M")
-    L = [f"📊 {titulo} · {_fecha_larga(ahora)} · {hora}", ""]
-
-    if sin_deltas:
-        L.append("🔒 Mercado cerrado · valores del último cierre")
-        L.append("")
-
-    # --- Dólar (oficial arriba, sin su variación) ---------------------------
+    # --- Recolectar valores --------------------------------------------------
     ofi_v, _ = dl("oficial")
     blue_v, blue_d = dl("blue")
     mep_v, _ = dl("bolsa")
     ccl_v, _ = dl("contadoconliqui")
 
-    L.append("💵 Dólar")
-    L.append(f"   Oficial   {_money(ofi_v)}")
-    linea_blue = f"   Blue      {_money(blue_v)}"
-    if _pct(blue_d):
-        linea_blue += f"   {_pct(blue_d)}"
-    L.append(linea_blue)
-    L.append(f"   MEP       {_money(mep_v)}")
-    L.append(f"   CCL       {_money(ccl_v)}")
-    L.append("")
-
-    # --- Mercado -------------------------------------------------------------
-    L.append("📈 Mercado")
     rp_v = riesgo.get("valor")
     rp_d = None if sin_deltas else riesgo.get("d")
-    linea_rp = f"   Riesgo país   {int(rp_v)} pb" if rp_v is not None else "   Riesgo país   s/d"
-    if _pct(rp_d):
-        linea_rp += f"   {_pct(rp_d)}"
-    L.append(linea_rp)
 
-    # Merval sale del bloque 'mercado' (yfinance) — puede no estar en agregador.
-    merc = agg.get("mercado_yf") or (agg.get("mercado") if isinstance(agg.get("mercado"), dict) else {})
-    merval = None
-    # yfinance se guarda en el bucket 'mercado'; lo intentamos leer aparte.
     mkt, _ = _leer_bucket("mercado")
     yf = (mkt.get("yfinance") or {}).get("indices") or {}
     mv = yf.get("Merval") or {}
-    if mv.get("precio") is not None:
-        pts = mv["precio"] / 1_000_000
-        mv_d = None if sin_deltas else mv.get("var_pct")
-        linea_mv = f"   Merval        {pts:.2f}".replace(".", ",") + " M pts"
-        if _pct(mv_d):
-            linea_mv += f"   {_pct(mv_d)}"
-        L.append(linea_mv)
-    L.append("")
+    mv_v = mv.get("precio")
+    mv_d = None if sin_deltas else mv.get("var_pct")
 
-    # --- Tasas (solo en el cierre) ------------------------------------------
+    # --- Filas del bloque de datos (etiqueta, valor, delta) -----------------
+    # Se arman como tuplas y luego se alinean en columnas monoespaciadas.
+    filas_dolar = [
+        ("Oficial", _money(ofi_v), ""),                 # oficial sin variación
+        ("Blue",    _money(blue_v), _pct(blue_d)),
+        ("MEP",     _money(mep_v), ""),
+        ("CCL",     _money(ccl_v), ""),
+    ]
+    filas_merc = []
+    if rp_v is not None:
+        filas_merc.append(("Riesgo país", f"{int(rp_v)} pb", _pct(rp_d)))
+    if mv_v is not None:
+        pts = f"{mv_v / 1_000_000:.2f}".replace(".", ",") + " M"
+        filas_merc.append(("Merval", pts, _pct(mv_d)))
+
+    filas_tasas = []
     if tipo == "cierre":
         bm = ofi.get("bcra_monetarias") or {}
-        def tasa(k):
-            t = bm.get(k) or {}
-            return t.get("valor")
-        badlar = tasa("tasa_badlar")
-        pf = tasa("tasa_plazo_fijo")
-        tamar = tasa("tasa_tamar")
-        if any(v is not None for v in (badlar, pf, tamar)):
-            L.append("🏦 Tasas (TNA)")
-            if badlar is not None:
-                L.append(f"   BADLAR    {str(badlar).replace('.', ',')}%")
-            if pf is not None:
-                L.append(f"   Plazo fijo {str(pf).replace('.', ',')}%")
-            if tamar is not None:
-                L.append(f"   TAMAR     {str(tamar).replace('.', ',')}%")
-            L.append("")
+        def tv(k):
+            return _tasa((bm.get(k) or {}).get("valor"))
+        for etq, k in (("BADLAR", "tasa_badlar"),
+                       ("Plazo fijo", "tasa_plazo_fijo"),
+                       ("TAMAR", "tasa_tamar")):
+            val = tv(k)
+            if val is not None:
+                filas_tasas.append((etq, val + "%", ""))
 
-    # --- Pie -----------------------------------------------------------------
-    L.append("Cada dato con su fuente y su hora.")
-    L.append("🔗 guarismo.com.ar")
+    # --- Alineado en columnas (ancho fijo por columna) ----------------------
+    todas = filas_dolar + filas_merc + filas_tasas
+    w_lbl = max(len(f[0]) for f in todas)          # ancho etiqueta
+    w_val = max(len(f[1]) for f in todas)          # ancho valor
 
-    return "\n".join(L), None
+    def fila(f):
+        etq, val, delta = f
+        s = f"{etq:<{w_lbl}}  {val:>{w_val}}"
+        if delta:
+            s += f"  {delta}"
+        return s
+
+    # --- Armado final (bloque monoespaciado con Markdown) -------------------
+    titulo = TITULOS.get(tipo, "Guarismo")
+    hora = ahora.strftime("%H:%M")
+
+    cuerpo = []
+    if sin_deltas:
+        cuerpo.append("Mercado cerrado · último cierre")
+        cuerpo.append("")
+    cuerpo.append("DÓLAR")
+    cuerpo += [fila(f) for f in filas_dolar]
+    cuerpo.append("")
+    cuerpo.append("MERCADO")
+    cuerpo += [fila(f) for f in filas_merc]
+    if filas_tasas:
+        cuerpo.append("")
+        cuerpo.append("TASAS (TNA)")
+        cuerpo += [fila(f) for f in filas_tasas]
+
+    bloque = "```\n" + "\n".join(cuerpo) + "\n```"
+
+    texto = (
+        f"📊 *{titulo}* · {_fecha_larga(ahora)} · {hora}\n\n"
+        f"{bloque}\n\n"
+        f"_Cada dato con su fuente y su hora._\n"
+        f"🔗 guarismo.com.ar"
+    )
+    return texto, None
 
 
 # ---------------------------------------------------------------------------
@@ -253,6 +270,7 @@ def enviar(texto):
     r = requests.post(
         f"https://api.telegram.org/bot{token}/sendMessage",
         json={"chat_id": CHAT_ID, "text": texto,
+              "parse_mode": "Markdown",
               "disable_web_page_preview": True},
         timeout=TIMEOUT)
     if not r.ok:
