@@ -254,8 +254,7 @@ def armar_texto(tipo):
     texto = (
         f"📊 *{titulo}* · {_fecha_larga(ahora)} · {hora}\n\n"
         f"{bloque}\n\n"
-        f"_Cada dato con su fuente y su hora._\n"
-        f"🔗 guarismo.com.ar"
+        f"_Cada dato con su fuente y su hora, en_ guarismo.com.ar"
     )
     return texto, None
 
