@@ -846,6 +846,198 @@ def detectar_breaking(r, rem_data):
     return best
 
 
+# ===========================================================================
+# Breaking news → TELEGRAM (inmediato, en el momento que se detecta)
+#
+#   La app muestra UN breaking a la vez (detectar_breaking). Telegram quiere
+#   UN AVISO POR EVENTO: si el mismo momento sale el IPC y salta el dólar, la
+#   app muestra uno, pero el canal manda los dos.
+#
+#   Por eso hay dos caminos con la MISMA detección:
+#     · detectar_breaking()      → uno (para la app). NO se toca.
+#     · detectar_breaking_todos()→ todos los candidatos nuevos (para Telegram).
+#
+#   Anti-repetición: guardamos en Supabase (bucket "breaking_tg") la lista de
+#   ids ya publicados HOY. Un id se publica una sola vez. Al cambiar el día,
+#   la lista se reinicia sola (comparamos la fecha guardada con hoy).
+#
+#   Los saltos de dólar/Merval usan ESCALONES de 5%: +5% avisa, +7% calla,
+#   +10% vuelve a avisar (el id lleva el escalón: usd-salto-5, usd-salto-10).
+# ===========================================================================
+TG_CHAT_ID = "-1004388956898"        # canal @guarismo_ar (no es secreto)
+TG_SALTO_PCT = 5                     # umbral de salto para dólar y Merval
+
+def _to_telegram(texto):
+    """Publica en el canal. Requiere TELEGRAM_TOKEN en el entorno.
+    Si no está, no hace nada (el pipeline de datos no depende de esto)."""
+    import os
+    token = os.getenv("TELEGRAM_TOKEN")
+    if not token:
+        print("   [telegram] sin TELEGRAM_TOKEN; se omite el envío.")
+        return False
+    try:
+        r = requests.post(
+            f"https://api.telegram.org/bot{token}/sendMessage",
+            json={"chat_id": TG_CHAT_ID, "text": texto,
+                  "parse_mode": "Markdown",
+                  "disable_web_page_preview": True},
+            timeout=TIMEOUT)
+        if not r.ok:
+            print(f"   [telegram] {r.status_code}: {r.text[:120]}")
+            return False
+        return True
+    except Exception as e:
+        print(f"   [telegram] error: {e}")
+        return False
+
+def _escalon_pct(base, actual, paso=TG_SALTO_PCT):
+    """Mayor múltiplo de 'paso' que |variación %| alcanzó. 0 si no llegó a 'paso'.
+    Ej: base=1000, actual=1075 → +7,5% → escalón 5. actual=1105 → escalón 10.
+    Devuelve (escalon_abs, signo) donde signo es +1 (subió) o -1 (bajó)."""
+    try:
+        base, actual = float(base), float(actual)
+        if base <= 0:
+            return 0, 0
+    except (TypeError, ValueError):
+        return 0, 0
+    var = (actual / base - 1) * 100
+    esc = (int(abs(var) // paso)) * paso
+    return esc, (1 if var > 0 else -1)
+
+def _brk_saltos_dolar(r):
+    """Saltos de 5% del dólar blue: contra el cierre de ayer Y contra la
+    apertura de hoy. Devuelve lista de breaking (puede haber 0, 1 o 2)."""
+    out = []
+    dd = (r.get("agregador", {}) or {}).get("dolares") or {}
+    blue = dd.get("blue") or {}
+    v = blue.get("venta")
+    if v is None:
+        return out
+
+    # a) vs CIERRE DE AYER — el conector ya lo guarda en cierre_valor.
+    cierre = blue.get("cierre_valor")
+    esc, signo = _escalon_pct(cierre, v)
+    if esc >= TG_SALTO_PCT:
+        dir_txt = "subió" if signo > 0 else "bajó"
+        out.append(_breaking(
+            f"usd-apertura-{esc}-{'up' if signo>0 else 'dn'}",
+            f"El dólar blue {dir_txt} {esc}% respecto del cierre anterior\n"
+            f"Ahora: ${int(v):,}".replace(",", "."),
+            "dolarapi", prioridad=1, metric="dolar", valor=v,
+            valencia="neutro", label="🔴 Salto del dólar"))
+
+    # b) vs APERTURA DE HOY — bucket "apertura" (lo guarda guardar_apertura()).
+    ap = (_prev("apertura").get("blue") or {}).get("valor")
+    esc2, signo2 = _escalon_pct(ap, v)
+    if esc2 >= TG_SALTO_PCT:
+        dir_txt = "subió" if signo2 > 0 else "bajó"
+        out.append(_breaking(
+            f"usd-intradia-{esc2}-{'up' if signo2>0 else 'dn'}",
+            f"El dólar blue {dir_txt} {esc2}% en el día\n"
+            f"Ahora: ${int(v):,}".replace(",", "."),
+            "dolarapi", prioridad=1, metric="dolar", valor=v,
+            valencia="neutro", label="🔴 Salto del dólar"))
+    return out
+
+def _brk_saltos_merval(r):
+    """Salto de 5% del Merval, contra el cierre anterior (yfinance ya da var_pct
+    intradía; para el salto vs cierre usamos el bucket 'apertura')."""
+    out = []
+    mkt = (r.get("mercado", {}) or {}).get("yfinance") or {}
+    mv = (mkt.get("indices") or {}).get("Merval") or {}
+    v = mv.get("precio")
+    if v is None:
+        return out
+    ap = (_prev("apertura").get("merval") or {}).get("valor")
+    esc, signo = _escalon_pct(ap, v)
+    if esc >= TG_SALTO_PCT:
+        dir_txt = "subió" if signo > 0 else "bajó"
+        out.append(_breaking(
+            f"merval-{esc}-{'up' if signo>0 else 'dn'}",
+            f"El Merval {dir_txt} {esc}% en el día\n"
+            f"Ahora: {v/1_000_000:.2f}".replace(".", ",") + " M pts",
+            "BYMA", prioridad=2, metric="merval", valor=v,
+            valencia="neutro", label="🔴 Salto del Merval"))
+    return out
+
+def detectar_breaking_todos(r, rem_data):
+    """TODOS los breaking nuevos (para Telegram). Reusa detectar_breaking para
+    los agendados/umbral existentes, y suma los saltos de 5%."""
+    todos = []
+    # Los que ya detecta el sistema (IPC, TAMAR, dólar $50, riesgo país):
+    uno = detectar_breaking(r, rem_data)
+    if uno and not uno.get("error"):
+        todos.append(uno)
+    # Los saltos de 5% (nuevos):
+    todos += _brk_saltos_dolar(r)
+    todos += _brk_saltos_merval(r)
+    return todos
+
+def _fmt_breaking_tg(b):
+    """Texto del posteo de breaking para Telegram."""
+    label = b.get("label", "🔴 Breaking news")
+    ahora = _ahora_ar().strftime("%H:%M")
+    L = [f"*{label}* · {ahora}", "", b.get("text", "")]
+    esp = b.get("esperado")
+    if esp is not None and b.get("valor") is not None:
+        try:
+            dif = float(b["valor"]) - float(esp)
+            comp = "por encima" if dif > 0 else "por debajo" if dif < 0 else "en línea"
+            L.append(f"_Esperado: {_fmt(esp)}% · {comp} de lo previsto (REM)_")
+        except Exception:
+            pass
+    L.append("")
+    L.append("_Más en_ guarismo.com.ar")
+    return "\n".join(L)
+
+def publicar_breaking_tg(r, rem_data):
+    """Detecta todos los breaking nuevos y publica en Telegram los que no se
+    hayan publicado hoy. Mantiene el registro en el bucket 'breaking_tg'."""
+    todos = detectar_breaking_todos(r, rem_data)
+    if not todos:
+        return None
+
+    hoy = _ahora_ar().date().isoformat()
+    reg = _prev("breaking_tg") or {}
+    # Reinicio diario: si el registro es de otro día, empezamos limpio.
+    ya = set(reg.get("ids", [])) if reg.get("fecha") == hoy else set()
+
+    publicados = list(ya)
+    for b in todos:
+        bid = b.get("id")
+        if not bid or bid in ya:
+            continue
+        if _to_telegram(_fmt_breaking_tg(b)):
+            publicados.append(bid)
+            print(f"   [telegram breaking] {bid}")
+
+    # Devolvemos el registro actualizado para escribirlo en Supabase.
+    return {"fecha": hoy, "ids": publicados}
+
+def guardar_apertura(r):
+    """Guarda el valor de apertura de hoy (blue + Merval) la PRIMERA vez que el
+    mercado está abierto en el día. El resto del día no lo pisa. Al otro día,
+    como la fecha cambia, se vuelve a guardar. Auto-gestionado, sin mantenimiento.
+    Sirve para medir los saltos intradía (vs apertura)."""
+    est = (r.get("agregador", {}) or {}).get("mercado") or {}
+    if not est.get("abierto"):
+        return None
+    hoy = _ahora_ar().date().isoformat()
+    prev = _prev("apertura")
+    if prev.get("fecha") == hoy:
+        return None                     # ya guardamos la apertura de hoy
+    dd = (r.get("agregador", {}) or {}).get("dolares") or {}
+    blue = (dd.get("blue") or {}).get("venta")
+    mkt = (r.get("mercado", {}) or {}).get("yfinance") or {}
+    merval = ((mkt.get("indices") or {}).get("Merval") or {}).get("precio")
+    ap = {"fecha": hoy}
+    if blue is not None:
+        ap["blue"] = {"valor": blue}
+    if merval is not None:
+        ap["merval"] = {"valor": merval}
+    return ap if (blue is not None or merval is not None) else None
+
+
 def main():
     job = sys.argv[1] if len(sys.argv) > 1 else "todo"
     if job not in JOBS:
@@ -886,6 +1078,20 @@ def main():
     if brk and not brk.get("error"):
         r["breaking"] = brk                         # fila propia; la app lee raw.breaking
         print(f"   [breaking] {brk.get('id')} · {brk.get('text','')[:48]}")
+
+    # --- Apertura del día (para los saltos intradía) ------------------------
+    # Se guarda una vez al abrir el mercado; el resto del día no se pisa.
+    ap = guardar_apertura(r)
+    if ap:
+        r["apertura"] = ap                          # bucket propio en Supabase
+        print(f"   [apertura] guardada: {ap.get('fecha')}")
+
+    # --- Breaking news → Telegram (inmediato, un aviso por evento) ----------
+    # Corre solo cuando hay datos de mercado (bloque agregador/mercado presente).
+    if "agregador" in r:
+        reg = bloque("breaking → telegram", lambda: publicar_breaking_tg(r, rem_data))
+        if reg:
+            r["breaking_tg"] = reg                  # registro de ids ya publicados hoy
 
     with open("guarismo_datos.json", "w", encoding="utf-8") as f:
         json.dump(r, f, ensure_ascii=False, indent=2, default=str)
