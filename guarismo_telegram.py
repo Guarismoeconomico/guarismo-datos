@@ -88,7 +88,7 @@ def _tasa(v):
 
 
 def _pct(d):
-    """0.3 -> '▲0,3%' | -0.3 -> '▼0,3%' | 0 -> '—' | None -> '' (sin dato)."""
+    """0.3 -> '▲0,3%' | -0.3 -> '▼0,3%' | 0 -> '0,0%' | None -> '' (sin dato)."""
     if d is None:
         return ""
     try:
@@ -96,7 +96,7 @@ def _pct(d):
     except (TypeError, ValueError):
         return ""
     if abs(d) < 0.05:
-        return "—"
+        return "0,0%"
     flecha = "▲" if d > 0 else "▼"
     return f"{flecha}{abs(d):.1f}".replace(".", ",") + "%"
 
