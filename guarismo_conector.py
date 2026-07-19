@@ -462,6 +462,22 @@ def to_supabase(datos):
 
 BUCKETS_ARCHIVO = ("oficial", "agregador")
 
+# Claves que NO se archivan: no son dato publicado por una fuente, sino estado
+# que Guarismo deriva del reloj en cada corrida. Si se archivaran, generarían
+# una captura nueva cada 30 min aunque ningún dato haya cambiado, y la tabla es
+# append-only (no se puede limpiar después).
+#   agregador.mercado → abierto/cerrado, recalculado en cada ejecución.
+CLAVES_VOLATILES = {
+    "agregador": ("mercado",),
+}
+
+def _sin_volatiles(bucket, cont):
+    """Devuelve el contenido sin las claves derivadas del momento de captura."""
+    excl = CLAVES_VOLATILES.get(bucket, ())
+    if not excl:
+        return cont
+    return {k: v for k, v in cont.items() if k not in excl}
+
 def _canon(obj):
     """Serialización canónica y determinista. Base de todo el sellado."""
     return json.dumps(obj, sort_keys=True, separators=(",", ":"),
@@ -486,7 +502,7 @@ def to_historico(datos):
         if not isinstance(cont, dict):
             continue
         try:
-            canon = _canon(cont)
+            canon = _canon(_sin_volatiles(bucket, cont))
             h_cont = _sha(canon)
 
             # última fila de ESTE bucket (cadena por bucket, no global:
