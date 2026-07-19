@@ -1,0 +1,50 @@
+name: Guarismo sellado (raiz diaria)
+
+# Calcula la raíz del archivo, la publica en el repo y la ancla en Bitcoin.
+#
+# El commit al repo público es parte esencial del anclaje: deja la raíz con una
+# fecha registrada por GitHub, que Guarismo no puede falsificar hacia atrás.
+
+on:
+  workflow_dispatch:
+    inputs:
+      modo:
+        description: "sellar (diario) | actualizar (semanal)"
+        required: false
+        default: "sellar"
+        type: choice
+        options: [sellar, actualizar]
+  schedule:
+    # Respaldo únicamente: el reloj real es cron-job.org.
+    - cron: "40 2 * * *"
+
+permissions:
+  contents: write        # necesario para commitear la raíz de vuelta al repo
+
+jobs:
+  sellar:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - run: pip install requests opentimestamps-client
+
+      - name: Calcular y sellar la raiz
+        run: python guarismo_sellador.py ${{ inputs.modo || 'sellar' }}
+
+      - name: Publicar la raiz en el repo
+        run: |
+          git config user.name  "guarismo-sellador"
+          git config user.email "infoguarismo@gmail.com"
+          git add sellos/
+          if git diff --staged --quiet; then
+            echo "Sin cambios: la raiz del dia ya estaba publicada."
+          else
+            git commit -m "Sello del archivo — $(date -u +%Y-%m-%d)"
+            git push
+            echo "Raiz publicada."
+          fi
