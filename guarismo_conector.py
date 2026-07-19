@@ -92,6 +92,10 @@ BCRA_MATCH = {
     "tasa_prestamos":  ["préstamos", "personales"],
     "cer":             ["coeficiente", "estabilización"],
     "uva":             ["valor", "adquisitivo"],
+    # ICL — Índice para Contratos de Locación (BCRA, id 40, base 30.6.20=1).
+    # No se muestra en la app: entra para que el ARCHIVO lo empiece a sellar.
+    # Serie diaria, completa desde su origen (1-jul-2020) y redistribuible.
+    "icl":             ["contratos", "locación"],
 }
 
 def bcra_monetarias():
