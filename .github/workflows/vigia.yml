@@ -1,0 +1,24 @@
+name: Guarismo vigia (archivo)
+
+# Monitor independiente del conector.
+# Si algo falla, el job termina en rojo y GitHub manda el mail automático.
+# No necesita secretos: usa solo la clave anon (pública, read-only).
+
+on:
+  workflow_dispatch: {}
+  schedule:
+    # Respaldo únicamente. El reloj real es cron-job.org (el cron de GitHub
+    # descarta corridas en silencio y no se cuenta con él).
+    - cron: "17 */6 * * *"
+
+jobs:
+  vigia:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install requests
+      - name: Verificar pipeline y cadena
+        run: python guarismo_vigia.py
