@@ -542,6 +542,96 @@ def to_historico(datos):
             print(f"   [archivo] {bucket}: error ({e}) — el pipeline sigue.")
 
 
+# ===========================================================================
+# 🟢 OFICIAL — API Series de Tiempo (datos.gob.ar)
+# ===========================================================================
+# Más de 30.000 series de la Administración Pública Nacional, licencia
+# Creative Commons Attribution 4.0 (redistribuible citando la fuente).
+#
+# Por qué estas y no otras: salen del cruce entre lo MÁS CONSULTADO de la API
+# pública (17,9 millones de pedidos analizados, 2018-2021) y lo que MÁS SE
+# REVISA. Archivar una serie que nunca se corrige no agrega nada: si alguien
+# la necesita, la baja de la fuente. El valor del archivo está en las que
+# cambian después de publicadas — y el EMAE es la que más se revisa del país.
+#
+# El TCRM es la serie más consultada de Argentina (10,7% del tráfico) y el
+# BCRA NO la expone en su API v4.0: solo está acá.
+#
+# Las descripciones NO se hardcodean: se leen de la API en cada corrida. Si el
+# INDEC cambia el nombre, la unidad o la base de una serie, el archivo lo
+# registra. Un cambio de metadata también es una revisión.
+
+DG_API = "https://apis.datos.gob.ar/series/api/series"
+
+SERIES_DATOSGOB = {
+    # --- huecos del top del ranking que Guarismo no cubría ---
+    "tcrm":             "116.4_TCRZE_2015_D_36_4",
+    "saldo_comercial":  "74.3_ISC_0_M_19",
+    "emae_var_mensual": "143.3_ICE_SER_VM_2004_A_34",
+    # --- sectores del EMAE (alta demanda sostenida + alta revisión) ---
+    "emae_transporte":  "11.3_EMC_2004_M_25",
+    "emae_admin_pub":   "11.3_C_2004_M_60",
+    "emae_salud":       "11.3_HR_2004_M_24",
+    "emae_inmobiliario": "11.3_SEGA_2004_M_48",
+    "emae_minas":       "11.3_ISD_2004_M_26",
+    "emae_sector_39":   "11.3_ISOM_2004_M_39",
+}
+
+
+def _dg_campo(d, *rutas):
+    """La API anida en 'field' y 'dataset'. Tolera que cambien los nombres."""
+    for ruta in rutas:
+        v = d
+        for tramo in ruta.split("."):
+            if not isinstance(v, dict):
+                v = None
+                break
+            v = v.get(tramo)
+        if v not in (None, ""):
+            return v
+    return None
+
+
+def _dg_una(sid):
+    """Último valor publicado de una serie, con su metadata oficial."""
+    j = get(DG_API, params={"ids": sid, "limit": 1, "sort": "desc",
+                            "metadata": "full", "format": "json"})
+    datos = j.get("data") or []
+    if not datos or len(datos[0]) < 2:
+        return {"id": sid, "error": "sin datos"}
+
+    fecha, valor = datos[0][0], datos[0][1]
+    meta = next((m for m in (j.get("meta") or [])
+                 if isinstance(m, dict) and (m.get("field") or m.get("dataset"))),
+                {})
+    return {
+        "id": sid,
+        "valor": valor,
+        "fecha": fecha,
+        "descripcion": _dg_campo(meta, "field.description", "dataset.title"),
+        "unidades": _dg_campo(meta, "field.units"),
+        "frecuencia": _dg_campo(meta, "field.frequency", "distribution.frequency"),
+        "fuente": _dg_campo(meta, "dataset.source", "dataset.publisher.name"),
+    }
+
+
+def datosgob():
+    """Baja las series curadas. Si una falla, las demás igual entran:
+    perder una serie no puede costar las otras ocho."""
+    out = {"_fuente": "apis.datos.gob.ar · Series de Tiempo APN",
+           "_licencia": "Creative Commons Attribution 4.0"}
+    for clave, sid in SERIES_DATOSGOB.items():
+        try:
+            out[clave] = _dg_una(sid)
+        except Exception as e:
+            out[clave] = {"id": sid, "error": str(e)}
+            print(f"   [datosgob] {clave}: {e}")
+    ok = sum(1 for k, v in out.items()
+             if not k.startswith("_") and "error" not in v)
+    print(f"   [datosgob] {ok}/{len(SERIES_DATOSGOB)} series OK")
+    return out
+
+
 # Qué buckets corre cada job (por cadencia):
 #   diario   → oficial      (BCRA diario, INDEC mensual)
 #   intradia → agregador + mercado (dólar/riesgo/cripto/commodities)
@@ -550,7 +640,8 @@ BLOQUES = {
     "oficial":   ("🟢 datos oficiales, redistribuibles", [
         ("inflacion", "INDEC · IPC", "inflacion"),
         ("bcra_monetarias", "BCRA · reservas/base/tasas", "bcra_monetarias"),
-        ("dolar_oficial", "BCRA · dólar oficial", "bcra_dolar_oficial")]),
+        ("dolar_oficial", "BCRA · dólar oficial", "bcra_dolar_oficial"),
+        ("datosgob", "datos.gob.ar · EMAE, TCRM, saldo comercial", "datosgob")]),
     "agregador": ("🟡 API libre; revisar términos para uso comercial", [
         ("dolares", "dolarapi · dólar", "dolares"),
         ("mercado", "estado del mercado (abierto/cerrado)", "mercado_estado"),
