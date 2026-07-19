@@ -444,6 +444,84 @@ def to_supabase(datos):
     print(f"   [supabase] {len(filas)} filas escritas.")
 
 
+# ===========================================================================
+# ARCHIVO SELLADO (guarismo_historico) — registro append-only con cadena de hashes
+# ===========================================================================
+# Qué hace: guarda una copia de cada bucket CADA VEZ QUE SU CONTENIDO CAMBIA,
+# encadenada criptográficamente a la captura anterior del mismo bucket.
+#
+# Reglas de diseño (NO cambiar sin re-generar toda la cadena):
+#   1. Solo se archivan los buckets 🟢 oficial y 🟡 agregador. El 🔴 mercado es
+#      market data licenciada: no se archiva para redistribuir.
+#   2. El contenido se guarda como TEXTO canónico, no como jsonb. Postgres
+#      normaliza jsonb (reordena claves, toca decimales) y eso rompería el hash.
+#   3. Canonicalización: sort_keys=True, separators=(",",":"), ensure_ascii=False.
+#      El verificador público depende de esta definición exacta.
+#   4. Deduplicación por hash: si el contenido no cambió, no se inserta fila.
+#   5. Nunca puede romper el pipeline: todo error se traga y se loguea.
+
+BUCKETS_ARCHIVO = ("oficial", "agregador")
+
+def _canon(obj):
+    """Serialización canónica y determinista. Base de todo el sellado."""
+    return json.dumps(obj, sort_keys=True, separators=(",", ":"),
+                      ensure_ascii=False, default=str)
+
+def _sha(s):
+    import hashlib
+    return hashlib.sha256(s.encode("utf-8")).hexdigest()
+
+def to_historico(datos):
+    """Inserta en guarismo_historico una fila por bucket que haya cambiado."""
+    import os
+    url, key = os.getenv("SUPABASE_URL"), os.getenv("SUPABASE_KEY")
+    if not (url and key):
+        print("   [archivo] sin SUPABASE_URL/KEY; se omite.")
+        return
+    H = {"apikey": key, "Authorization": f"Bearer {key}",
+         "Content-Type": "application/json"}
+
+    for bucket in BUCKETS_ARCHIVO:
+        cont = datos.get(bucket)
+        if not isinstance(cont, dict):
+            continue
+        try:
+            canon = _canon(cont)
+            h_cont = _sha(canon)
+
+            # última fila de ESTE bucket (cadena por bucket, no global:
+            # evita colisiones entre el job diario y el intradía)
+            q = requests.get(
+                f"{url}/rest/v1/guarismo_historico"
+                f"?bucket=eq.{bucket}&select=hash_contenido,hash_cadena"
+                f"&order=id.desc&limit=1",
+                headers=H, timeout=TIMEOUT)
+            q.raise_for_status()
+            prev = (q.json() or [None])[0]
+
+            if prev and prev["hash_contenido"] == h_cont:
+                print(f"   [archivo] {bucket}: sin cambios.")
+                continue
+
+            h_prev = prev["hash_cadena"] if prev else None
+            h_cad = _sha((h_prev or "") + h_cont)
+
+            w = requests.post(
+                f"{url}/rest/v1/guarismo_historico",
+                headers=H,
+                json={"bucket": bucket,
+                      "capturado_en": datos["actualizado"],
+                      "contenido": canon,
+                      "hash_contenido": h_cont,
+                      "hash_previo": h_prev,
+                      "hash_cadena": h_cad},
+                timeout=TIMEOUT)
+            w.raise_for_status()
+            print(f"   [archivo] {bucket}: NUEVA captura · {h_cad[:12]}…")
+        except Exception as e:
+            print(f"   [archivo] {bucket}: error ({e}) — el pipeline sigue.")
+
+
 # Qué buckets corre cada job (por cadencia):
 #   diario   → oficial      (BCRA diario, INDEC mensual)
 #   intradia → agregador + mercado (dólar/riesgo/cripto/commodities)
@@ -1101,6 +1179,13 @@ def main():
         to_supabase(r)
     except Exception as e:
         print(f"   [supabase] error: {e}")
+
+    # --- Archivo sellado (append-only, con cadena de hashes) ----------------
+    # Va DESPUÉS de to_supabase y nunca puede interrumpir la corrida.
+    try:
+        to_historico(r)
+    except Exception as e:
+        print(f"   [archivo] error: {e}")
     return 0
 
 if __name__ == "__main__":
