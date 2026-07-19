@@ -47,7 +47,7 @@ SUPABASE_URL = "https://rudepkizcatkhqprqjfw.supabase.co"
 ANON_KEY = "sb_publishable_nwqxJVCewzhySYY1JZ6Lxw_DhbY0w8J"
 
 # El job intradía corre cada 30 min. Toleramos 2 corridas perdidas + margen.
-MAX_ATRASO_MIN = 95
+MAX_ATRASO_MIN = 1
 
 BUCKETS = ("oficial", "agregador")
 TIMEOUT = 30
