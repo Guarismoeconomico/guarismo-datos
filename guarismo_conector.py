@@ -44,9 +44,30 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 TIMEOUT = 20
 UA = {"User-Agent": "Guarismo/1.0"}
 
+# Espejo del crudo: cada respuesta original, tal como la devolvió la fuente,
+# se acumula acá durante la corrida y se vuelca a guarismo_crudo al final.
+# Protege ante cambios de formato de la fuente y permite reprocesar.
+_ESPEJO = []
+
+def _registrar_crudo(r):
+    """Guarda la respuesta HTTP cruda. Nunca puede romper el pipeline."""
+    try:
+        cuerpo = r.text
+        _ESPEJO.append({
+            "url": r.url.split("?")[0],          # sin querystring (puede traer claves)
+            "status": r.status_code,
+            "fuente_date": r.headers.get("Date"),
+            "cuerpo": cuerpo,
+            "bytes": len(cuerpo.encode("utf-8")),
+        })
+    except Exception:
+        pass
+
 def get(url, **kw):
     kw.setdefault("headers", UA); kw.setdefault("timeout", TIMEOUT)
-    r = requests.get(url, **kw); r.raise_for_status(); return r.json()
+    r = requests.get(url, **kw); r.raise_for_status()
+    _registrar_crudo(r)
+    return r.json()
 
 
 def get_full(url, **kw):
@@ -55,6 +76,7 @@ def get_full(url, **kw):
     GitHub se corriera, el desfasaje quedaría documentado (ISO/IEC 18014-4)."""
     kw.setdefault("headers", UA); kw.setdefault("timeout", TIMEOUT)
     r = requests.get(url, **kw); r.raise_for_status()
+    _registrar_crudo(r)
     return r.json(), r.headers.get("Date")
 
 
@@ -513,6 +535,40 @@ def _canon(obj):
 def _sha(s):
     import hashlib
     return hashlib.sha256(s.encode("utf-8")).hexdigest()
+
+def to_crudo(datos):
+    """Vuelca el espejo acumulado a guarismo_crudo. Una fila por respuesta.
+    Append-only: nunca actualiza, solo inserta. Nunca rompe la corrida."""
+    import os
+    url, key = os.getenv("SUPABASE_URL"), os.getenv("SUPABASE_KEY")
+    if not (url and key):
+        print("   [crudo] sin SUPABASE_URL/KEY; se omite.")
+        return
+    if not _ESPEJO:
+        print("   [crudo] nada que guardar.")
+        return
+    H = {"apikey": key, "Authorization": f"Bearer {key}",
+         "Content-Type": "application/json"}
+    cuando = datos["actualizado"]
+    commit = (datos.get("_traza") or {}).get("commit", "local")
+    filas = [{
+        "capturado_en": cuando,
+        "commit_sha": commit,
+        "url": e["url"],
+        "status": e["status"],
+        "fuente_date": e["fuente_date"],
+        "cuerpo": e["cuerpo"],
+        "bytes": e["bytes"],
+    } for e in _ESPEJO]
+    try:
+        w = requests.post(f"{url}/rest/v1/guarismo_crudo",
+                          headers=H, json=filas, timeout=TIMEOUT)
+        w.raise_for_status()
+        total = sum(f["bytes"] for f in filas)
+        print(f"   [crudo] {len(filas)} respuestas guardadas ({total/1024:.0f} KB)")
+    except Exception as e:
+        print(f"   [crudo] error ({e}) — el pipeline sigue.")
+
 
 def to_historico(datos):
     """Inserta en guarismo_historico una fila por bucket que haya cambiado."""
@@ -1341,6 +1397,12 @@ def main():
         to_historico(r)
     except Exception as e:
         print(f"   [archivo] error: {e}")
+
+    # --- Espejo del crudo (respaldo de las respuestas originales) -----------
+    try:
+        to_crudo(r)
+    except Exception as e:
+        print(f"   [crudo] error: {e}")
     return 0
 
 if __name__ == "__main__":
