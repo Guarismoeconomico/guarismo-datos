@@ -1,0 +1,37 @@
+name: Guarismo respaldo (archivo sellado)
+
+# Respalda el archivo sellado completo como artifact de GitHub, fuera de
+# Supabase. Es el paso 1 de la estrategia de respaldo: cubre el activo más
+# valioso hoy, sin cuentas nuevas. El paso 2 (crudo a almacenamiento S3) va
+# aparte, porque el crudo pesa mucho más.
+
+on:
+  workflow_dispatch: {}
+  schedule:
+    # Domingos 03:00 UTC (medianoche Argentina). Respaldo únicamente: el reloj
+    # real puede ir por cron-job.org si se quiere más control.
+    - cron: "0 3 * * 0"
+
+jobs:
+  respaldo:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - run: pip install requests
+
+      - name: Exportar el archivo sellado
+        env:
+          SUPABASE_ANON: ${{ secrets.SUPABASE_ANON }}
+        run: python exportar_archivo.py
+
+      - name: Subir como artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: archivo-sellado-${{ github.run_id }}
+          path: respaldo/*.json
+          retention-days: 90        # GitHub guarda el artifact 90 días
