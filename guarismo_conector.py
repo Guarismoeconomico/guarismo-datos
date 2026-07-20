@@ -36,7 +36,7 @@ NOTA SOBRE EL RELOJ (13 jul 2026)
     que es lo correcto (la lógica de mercado abierto/cerrado ya lo maneja).
 """
 
-import json, sys, datetime as dt
+import json, os, sys, datetime as dt
 import requests, urllib3
 
 VERIFY_BCRA = False
@@ -47,6 +47,15 @@ UA = {"User-Agent": "Guarismo/1.0"}
 def get(url, **kw):
     kw.setdefault("headers", UA); kw.setdefault("timeout", TIMEOUT)
     r = requests.get(url, **kw); r.raise_for_status(); return r.json()
+
+
+def get_full(url, **kw):
+    """Como get(), pero devuelve (json, fecha_servidor). El header 'Date' es una
+    atestación de tiempo de un TERCERO independiente: si el reloj del runner de
+    GitHub se corriera, el desfasaje quedaría documentado (ISO/IEC 18014-4)."""
+    kw.setdefault("headers", UA); kw.setdefault("timeout", TIMEOUT)
+    r = requests.get(url, **kw); r.raise_for_status()
+    return r.json(), r.headers.get("Date")
 
 
 # ===========================================================================
@@ -475,12 +484,26 @@ CLAVES_VOLATILES = {
     "agregador": ("mercado",),
 }
 
+# Metadatos de captura (no dato observado): cambian en cada corrida y NO deben
+# entrar al hash, o romperían la deduplicación. Se eliminan a cualquier nivel.
+META_CAPTURA = ("_fuente_date", "_traza")
+
+def _limpiar_meta(obj):
+    """Quita recursivamente los metadatos de captura antes de hashear."""
+    if isinstance(obj, dict):
+        return {k: _limpiar_meta(v) for k, v in obj.items()
+                if k not in META_CAPTURA}
+    if isinstance(obj, list):
+        return [_limpiar_meta(x) for x in obj]
+    return obj
+
 def _sin_volatiles(bucket, cont):
-    """Devuelve el contenido sin las claves derivadas del momento de captura."""
+    """Devuelve el contenido sin las claves derivadas del momento de captura:
+    las volátiles de primer nivel (ej. 'mercado') y los metadatos de captura
+    (_fuente_date, _traza) a cualquier profundidad."""
     excl = CLAVES_VOLATILES.get(bucket, ())
-    if not excl:
-        return cont
-    return {k: v for k, v in cont.items() if k not in excl}
+    base = {k: v for k, v in cont.items() if k not in excl} if excl else cont
+    return _limpiar_meta(base)
 
 def _canon(obj):
     """Serialización canónica y determinista. Base de todo el sellado."""
@@ -575,6 +598,15 @@ SERIES_DATOSGOB = {
     "emae_inmobiliario": "11.3_SEGA_2004_M_48",
     "emae_minas":       "11.3_ISD_2004_M_26",
     "emae_sector_39":   "11.3_ISOM_2004_M_39",
+    # --- crecimiento: niveles que se revisan (tanda 20-jul) ---
+    "emae_desest":        "143.3_NO_PR_2004_A_31",
+    "emae_tendencia":     "143.3_NO_PR_2004_A_28",
+    # --- actividad de alta frecuencia y fiscal ---
+    "demanda_elec_total": "367.3_DEMANDA_TOTAL__13",
+    "demanda_elec_resid": "367.3_DEMANDA_REIAL__19",
+    "recaudacion_total":  "172.3_TL_RECAION_M_0_0_17",
+    "ripte":              "158.1_REPTE_0_0_5",
+    "desocupacion":       "42.3_EPH_PUNTUATAL_0_M_30",
 }
 
 
@@ -594,8 +626,9 @@ def _dg_campo(d, *rutas):
 
 def _dg_una(sid):
     """Último valor publicado de una serie, con su metadata oficial."""
-    j = get(DG_API, params={"ids": sid, "limit": 1, "sort": "desc",
-                            "metadata": "full", "format": "json"})
+    j, fuente_date = get_full(DG_API, params={"ids": sid, "limit": 1,
+                              "sort": "desc", "metadata": "full",
+                              "format": "json"})
     datos = j.get("data") or []
     if not datos or len(datos[0]) < 2:
         return {"id": sid, "error": "sin datos"}
@@ -612,6 +645,7 @@ def _dg_una(sid):
         "unidades": _dg_campo(meta, "field.units"),
         "frecuencia": _dg_campo(meta, "field.frequency", "distribution.frequency"),
         "fuente": _dg_campo(meta, "dataset.source", "dataset.publisher.name"),
+        "_fuente_date": fuente_date,
     }
 
 
@@ -1232,7 +1266,17 @@ def main():
     if job not in JOBS:
         print(f"Uso: python {sys.argv[0]} [diario|intradia|todo]"); return 1
 
-    r = {"actualizado": dt.datetime.now().isoformat(timespec="seconds")}
+    # Traza de la corrida: qué código produjo estas capturas y cuándo.
+    # GITHUB_SHA lo inyecta Actions; en local queda "local". Con el commit,
+    # cualquiera puede ver en el repo el código exacto que generó el dato.
+    r = {
+        "actualizado": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),
+        "_traza": {
+            "commit": os.getenv("GITHUB_SHA", "local"),
+            "workflow": os.getenv("GITHUB_WORKFLOW", "local"),
+            "run": os.getenv("GITHUB_RUN_ID", ""),
+        },
+    }
     for nombre_bucket in JOBS[job]:
         licencia, items = BLOQUES[nombre_bucket]
         r[nombre_bucket] = {"_licencia": licencia}
