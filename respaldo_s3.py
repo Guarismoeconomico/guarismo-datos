@@ -8,19 +8,18 @@ QUE HACE
     en objetos NDJSON comprimidos (gzip), con su sha256 al lado.
 
 QUE NO HACE
-    NO borra nada de Supabase. La tabla esta protegida por el trigger
-    trg_crudo_no_update (BEFORE DELETE / BEFORE UPDATE -> guarismo_crudo_solo_insert()),
-    asi que ni siquiera podria. Este script solo LEE.
+    NO borra nada de Supabase. Solo LEE.
     => Este respaldo NO libera espacio en Supabase. Es un problema aparte.
 
 COMO SABE DONDE QUEDO
     Guarda el ultimo id respaldado en el propio bucket, en _estado/ultimo_id.txt.
-    No necesita ninguna tabla extra en Supabase. Si el objeto no existe, arranca de cero.
+    Si el proceso se corta, la proxima corrida retoma desde ahi. Nunca duplica.
 
-IDEMPOTENCIA
-    El watermark se escribe DESPUES de subir cada objeto. Si el proceso se corta,
-    la proxima corrida rehace el ultimo lote. Como la clave del objeto se deriva del
-    rango de ids, se sobrescribe a si mismo: no quedan duplicados.
+ROBUSTEZ
+    Las lecturas a Supabase reintentan con espera creciente ante errores
+    transitorios (5xx / timeouts / conexion): el gateway puede devolver 521
+    bajo carga sostenida en una instancia nano. Ademas se lee con pausa breve
+    entre paginas para no ahogar al servidor.
 
 VARIABLES DE ENTORNO (todas obligatorias salvo R2_BUCKET)
     SUPABASE_URL           https://xxxx.supabase.co
@@ -39,6 +38,7 @@ import io
 import json
 import os
 import sys
+import time
 from datetime import datetime, timezone
 
 import boto3
@@ -51,10 +51,18 @@ from botocore.exceptions import ClientError
 TABLA = "guarismo_crudo"
 COLUMNAS = "id,capturado_en,commit_sha,url,status,fuente_date,cuerpo,bytes"
 
-PAGINA = 200                            # filas por request a PostgREST
+PAGINA = 100                            # filas por request (paginas mas livianas)
+PAUSA_ENTRE_PAGINAS = 0.5               # segundos, para no ahogar al nano
 MAX_BYTES_OBJETO = 20 * 1024 * 1024     # ~20 MB sin comprimir por objeto
 CLAVE_ESTADO = "_estado/ultimo_id.txt"
 TIMEOUT = 120
+
+REINTENTOS = 6
+ESPERAS = [5, 10, 20, 40, 60, 90]       # backoff entre reintentos
+
+
+class _ErrorTransitorio(Exception):
+    pass
 
 
 def env(nombre, default=None):
@@ -111,7 +119,7 @@ def escribir_watermark(ultimo_id):
 # ---------------------------------------------------------------- lectura
 
 def bajar_pagina(desde_id):
-    """Filas con id > desde_id, ordenadas ascendente."""
+    """Filas con id > desde_id, ascendente. Reintenta ante errores transitorios."""
     url = f"{SUPABASE_URL}/rest/v1/{TABLA}"
     params = {
         "select": COLUMNAS,
@@ -124,9 +132,22 @@ def bajar_pagina(desde_id):
         "Authorization": f"Bearer {SUPABASE_KEY}",
         "Accept": "application/json",
     }
-    r = requests.get(url, params=params, headers=headers, timeout=TIMEOUT)
-    r.raise_for_status()
-    return r.json()
+    for intento in range(REINTENTOS):
+        try:
+            r = requests.get(url, params=params, headers=headers, timeout=TIMEOUT)
+            if 400 <= r.status_code < 500:
+                r.raise_for_status()          # error de config: no se reintenta
+            if r.status_code >= 500:
+                raise _ErrorTransitorio(f"HTTP {r.status_code} del servidor")
+            return r.json()
+        except (_ErrorTransitorio,
+                requests.exceptions.ConnectionError,
+                requests.exceptions.Timeout) as e:
+            if intento == REINTENTOS - 1:
+                raise
+            espera = ESPERAS[intento]
+            print(f"  [aviso] lectura fallo ({e}); reintento {intento + 1}/{REINTENTOS - 1} en {espera}s...")
+            time.sleep(espera)
 
 
 # ---------------------------------------------------------------- escritura
@@ -208,6 +229,7 @@ def main():
             ultimo = f["id"]
         if bytes_lote >= MAX_BYTES_OBJETO:
             flush()
+        time.sleep(PAUSA_ENTRE_PAGINAS)
 
     flush()
 
