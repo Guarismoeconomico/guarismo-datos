@@ -537,20 +537,47 @@ def _sha(s):
     return hashlib.sha256(s.encode("utf-8")).hexdigest()
 
 def to_crudo(datos):
-    """Vuelca el espejo acumulado a guarismo_crudo. Una fila por respuesta.
-    Append-only: nunca actualiza, solo inserta. Nunca rompe la corrida."""
-    import os
-    url, key = os.getenv("SUPABASE_URL"), os.getenv("SUPABASE_KEY")
-    if not (url and key):
-        print("   [crudo] sin SUPABASE_URL/KEY; se omite.")
-        return
+    """Guarda el espejo de respuestas crudas de esta corrida.
+
+    DESTINO PRIMARIO: Cloudflare R2 (un objeto NDJSON.gz por corrida).
+    RED DE SEGURIDAD: si R2 falla por lo que sea (red, credenciales, boto3
+    ausente), las filas van a guarismo_crudo como antes y respaldo_s3.py las
+    levanta en la corrida siguiente. Nunca se pierde una captura.
+
+    En operacion normal la tabla guarismo_crudo queda VACIA: ese es el punto
+    de todo este cambio. Supabase crecia ~17 MB/dia contra un limite de 500 MB.
+
+    Como siempre: nunca puede romper el pipeline.
+    """
     if not _ESPEJO:
         print("   [crudo] nada que guardar.")
         return
+
+    cuando = datos["actualizado"]
+    traza = datos.get("_traza") or {}
+    commit = traza.get("commit", "local")
+    job = traza.get("workflow", "local")
+
+    try:
+        import crudo_r2
+        clave, sha, comp = crudo_r2.subir(_ESPEJO, cuando, commit, job)
+        print(f"   [crudo] R2 OK: {len(_ESPEJO)} respuestas -> {clave} "
+              f"({comp/1024:.0f} KB gz, sha {sha[:12]}...)")
+        return
+    except Exception as e:
+        print(f"   [crudo] R2 fallo ({e}) — cae a Supabase (red de seguridad).")
+
+    _crudo_a_supabase(cuando, commit)
+
+
+def _crudo_a_supabase(cuando, commit):
+    """Red de seguridad: el comportamiento viejo, solo cuando R2 no responde."""
+    url, key = os.getenv("SUPABASE_URL"), os.getenv("SUPABASE_KEY")
+    if not (url and key):
+        print("   [crudo] sin SUPABASE_URL/KEY; se pierde el espejo de esta corrida.")
+        return
     H = {"apikey": key, "Authorization": f"Bearer {key}",
          "Content-Type": "application/json"}
-    cuando = datos["actualizado"]
-    commit = (datos.get("_traza") or {}).get("commit", "local")
     filas = [{
         "capturado_en": cuando,
         "commit_sha": commit,
@@ -565,7 +592,7 @@ def to_crudo(datos):
                           headers=H, json=filas, timeout=TIMEOUT)
         w.raise_for_status()
         total = sum(f["bytes"] for f in filas)
-        print(f"   [crudo] {len(filas)} respuestas guardadas ({total/1024:.0f} KB)")
+        print(f"   [crudo] Supabase (respaldo): {len(filas)} respuestas ({total/1024:.0f} KB)")
     except Exception as e:
         print(f"   [crudo] error ({e}) — el pipeline sigue.")
 
