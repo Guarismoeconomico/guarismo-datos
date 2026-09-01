@@ -1,0 +1,36 @@
+name: Guarismo boveda (snapshot datos.gob.ar)
+
+# Snapshot diario COMPLETO de las series de datos.gob.ar a R2, prefijo
+# boveda/datosgob/. No toca Supabase ni la vitrina: es archivo point-in-time.
+#
+# La API de datos.gob.ar SOBRESCRIBE con cada revision y no guarda vintages.
+# Lo que no se captura el dia que estaba, no se recupera nunca.
+#
+# EL RELOJ ES cron-job.org disparando workflow_dispatch. El bloque schedule
+# queda solo como red pasiva: el cron nativo de GitHub descarta corridas en
+# silencio. Al mirar Actions, filtrar por workflow_dispatch.
+
+on:
+  workflow_dispatch: {}
+  schedule:
+    - cron: "15 22 * * *"     # 19:15 ARG, best effort, NO se cuenta con esto
+
+jobs:
+  boveda:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - run: pip install requests boto3
+
+      - name: Snapshot completo de datos.gob.ar a R2
+        env:
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET: guarismo-crudo
+        run: python boveda_datosgob.py
