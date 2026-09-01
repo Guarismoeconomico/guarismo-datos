@@ -1,0 +1,277 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+boveda_indec.py — Captura los cuadros publicados del INDEC a la boveda.
+
+POR QUE EXISTE
+    El INDEC publica sus series como archivos Excel en URL FIJA y los
+    SOBRESCRIBE en cada publicacion, conservando el mismo nombre. La URL no
+    cambia; el contenido si. Nadie guarda las versiones viejas.
+
+    El EMAE es el caso extremo: la serie desestacionalizada se re-estima ENTERA
+    con cada dato nuevo. La propia metodologia del INDEC lo declara (Metodologia
+    INDEC N 20, seccion II.a): las mensualizaciones sufren modificaciones a
+    medida que se agregan observaciones trimestrales.
+
+    Lo que no se captura el dia que estaba, no se recupera nunca.
+
+QUE HACE
+    Baja cada archivo, lo hashea, y lo sube a R2 SOLO SI CAMBIO respecto de la
+    ultima vez. Pero escribe un manifiesto TODOS LOS DIAS, haya cambio o no.
+
+    Esa asimetria es a proposito. El manifiesto diario es lo que despues prueba
+    "el 5 de septiembre el archivo todavia decia lo mismo" sin guardar treinta
+    copias identicas de un Excel que se publica una vez por mes.
+
+FORMATO
+    boveda/indec/AAAA/MM/emae_mensual_20260901T221500Z.xls       (+ .sha256)
+    boveda/indec/manifiestos/AAAA/MM/manifiesto_20260901T221500Z.json
+    _estado/indec_hashes.json                                     (ultimo hash visto)
+
+    Si _estado se pierde, la unica consecuencia es que se re-sube una copia.
+    Nunca se pierde nada.
+
+ATESTACION DE TIEMPO
+    Se guardan los headers Date y Last-Modified del servidor del INDEC. El Date
+    es una atestacion de tiempo de un TERCERO independiente: si el reloj del
+    runner se corriera, el desfasaje queda documentado. Y el Last-Modified dice
+    cuando el INDEC toco el archivo por ultima vez — dato notarial propio.
+
+HUECOS, NO MENTIRAS
+    Si un archivo falla, queda registrado en el manifiesto con su error y su
+    fecha. Si fallan TODOS, el proceso termina en rojo y no sube nada.
+
+VARIABLES DE ENTORNO
+    R2_ENDPOINT, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY   (obligatorias)
+    R2_BUCKET                                             (opcional, default guarismo-crudo)
+
+CODIGOS DE SALIDA
+    0  todo bien (aunque algun archivo tenga hueco)
+    1  fallaron TODAS las descargas
+    3  hay datos pero R2 fallo  <- corrida en ROJO a proposito
+"""
+
+import hashlib
+import json
+import os
+import re
+import sys
+import time
+from datetime import datetime, timezone
+
+import requests
+
+for _f in (sys.stdout, sys.stderr):
+    try:
+        _f.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
+
+TIMEOUT = 120
+REINTENTOS = 3
+PAUSA = 1.0
+
+BUCKET_DEFAULT = "guarismo-crudo"
+PREFIJO = "boveda/indec"
+ESTADO = "_estado/indec_hashes.json"
+
+UA = {"User-Agent": "Guarismo/1.0 (+https://guarismo.com.ar; infoguarismo@gmail.com)"}
+
+# URLs ESTABLES, verificadas: aparecen citadas sin cambios en los informes de
+# prensa del EMAE de 2020, 2021, 2025 y 2026. El hash aleatorio del INDEC
+# afecta a los PDF de prensa (uploads/informesdeprensa/), NO a estos cuadros.
+ARCHIVOS = {
+    "emae_mensual": {
+        "url": "https://www.indec.gob.ar/ftp/cuadros/economia/sh_emae_mensual_base2004.xls",
+        "ext": "xls",
+        "desc": "EMAE. Numeros indice base 2004=100 y variaciones. Serie original, "
+                "desestacionalizada y tendencia-ciclo.",
+    },
+    "emae_actividad": {
+        "url": "https://www.indec.gob.ar/ftp/cuadros/economia/sh_emae_actividad_base2004.xls",
+        "ext": "xls",
+        "desc": "EMAE por sector de actividad. Base 2004=100 y variaciones.",
+    },
+    "emae_metodologia": {
+        "url": "https://www.indec.gob.ar/ftp/cuadros/economia/metodologia_emae_ago_16.pdf",
+        "ext": "pdf",
+        "desc": "Metodologia INDEC N 20 — EMAE base 2004, agosto 2016. ISSN 2545-7179.",
+    },
+}
+
+
+def _cliente():
+    import boto3
+    from botocore.config import Config
+
+    endpoint = os.getenv("R2_ENDPOINT")
+    key = os.getenv("R2_ACCESS_KEY_ID")
+    secret = os.getenv("R2_SECRET_ACCESS_KEY")
+    if not (endpoint and key and secret):
+        raise RuntimeError("faltan R2_ENDPOINT / R2_ACCESS_KEY_ID / R2_SECRET_ACCESS_KEY")
+
+    return boto3.client(
+        "s3",
+        endpoint_url=endpoint.rstrip("/"),
+        aws_access_key_id=key,
+        aws_secret_access_key=secret,
+        region_name="auto",
+        config=Config(signature_version="s3v4",
+                      retries={"max_attempts": 5, "mode": "standard"}),
+    )
+
+
+def bajar(url):
+    """Descarga binaria con reintentos. Devuelve (bytes, headers)."""
+    ultimo = None
+    for intento in range(REINTENTOS):
+        try:
+            r = requests.get(url, headers=UA, timeout=TIMEOUT)
+            r.raise_for_status()
+            if not r.content:
+                raise ValueError("respuesta vacia")
+            return r.content, dict(r.headers)
+        except Exception as e:
+            ultimo = e
+            if intento < REINTENTOS - 1:
+                time.sleep(2.0 * (intento + 1))
+    raise ultimo
+
+
+def leer_estado(s3, bucket):
+    """Ultimo hash visto de cada archivo. Si no existe, arranca vacio."""
+    try:
+        obj = s3.get_object(Bucket=bucket, Key=ESTADO)
+        return json.loads(obj["Body"].read().decode("utf-8"))
+    except Exception as e:
+        print(f"[indec] sin estado previo ({type(e).__name__}) — se trata todo como nuevo")
+        return {}
+
+
+def main():
+    ahora = datetime.now(timezone.utc)
+    run = re.sub(r"[^a-zA-Z0-9]+", "", os.getenv("GITHUB_RUN_ID", "local"))[:20]
+    sello = f"{ahora:%Y%m%dT%H%M%SZ}_{run or 'local'}"
+    bucket = os.getenv("R2_BUCKET") or BUCKET_DEFAULT
+
+    print(f"[indec] {len(ARCHIVOS)} archivos · captura de cuadros publicados")
+
+    try:
+        s3 = _cliente()
+    except Exception as e:
+        print(f"[indec] R2 fallo (cliente): {type(e).__name__}: {e}")
+        return 3
+
+    estado = leer_estado(s3, bucket)
+    entradas, ok, nuevos, huecos = [], 0, 0, 0
+
+    for clave, cfg in sorted(ARCHIVOS.items()):
+        capturado = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        try:
+            datos, headers = bajar(cfg["url"])
+            sha = hashlib.sha256(datos).hexdigest()
+            previo = (estado.get(clave) or {}).get("sha256")
+            cambio = (sha != previo)
+
+            entrada = {
+                "archivo": clave,
+                "url": cfg["url"],
+                "descripcion": cfg["desc"],
+                "capturado_utc": capturado,
+                "bytes": len(datos),
+                "sha256": sha,
+                # Atestacion de tiempo de un tercero independiente.
+                "http_date": headers.get("Date"),
+                "last_modified": headers.get("Last-Modified"),
+                "etag": headers.get("ETag"),
+                "cambio": cambio,
+            }
+
+            if cambio:
+                nombre = f"{clave}_{sello}.{cfg['ext']}"
+                obj = f"{PREFIJO}/{ahora:%Y/%m}/{nombre}"
+                s3.put_object(
+                    Bucket=bucket, Key=obj, Body=datos,
+                    ContentType=("application/pdf" if cfg["ext"] == "pdf"
+                                 else "application/vnd.ms-excel"),
+                    Metadata={
+                        "sha256": sha,
+                        "origen": "boveda-indec",
+                        "url": cfg["url"][:900],
+                        "capturado-utc": capturado,
+                    },
+                )
+                s3.put_object(
+                    Bucket=bucket, Key=obj + ".sha256",
+                    Body=f"{sha}  {nombre}\n".encode("utf-8"),
+                    ContentType="text/plain; charset=utf-8",
+                )
+                entrada["objeto"] = obj
+                estado[clave] = {"sha256": sha, "objeto": obj, "visto_utc": capturado}
+                nuevos += 1
+                marca = "NUEVO  →" if previo else "PRIMERA→"
+                print(f"   [indec] {clave:<18} {marca} {len(datos):>8} bytes  {sha[:12]}…")
+            else:
+                # Sin cambios: no se re-sube el binario, pero el manifiesto de
+                # hoy deja constancia de que seguia diciendo lo mismo.
+                entrada["objeto"] = (estado.get(clave) or {}).get("objeto")
+                print(f"   [indec] {clave:<18} sin cambios {len(datos):>8} bytes  {sha[:12]}…")
+
+            ok += 1
+        except Exception as e:
+            entrada = {
+                "archivo": clave,
+                "url": cfg["url"],
+                "capturado_utc": capturado,
+                "error": f"{type(e).__name__}: {e}",
+            }
+            huecos += 1
+            print(f"   [indec] {clave:<18} HUECO — {type(e).__name__}: {e}")
+
+        entradas.append(entrada)
+        time.sleep(PAUSA)
+
+    if ok == 0:
+        print("✗ Fallaron TODAS las descargas. No hay nada que archivar.")
+        return 1
+
+    manifiesto = {
+        "guarismo": "manifiesto de captura · cuadros publicados del INDEC",
+        "capturado_utc": ahora.isoformat(timespec="seconds"),
+        "fuente": "INDEC · indec.gob.ar",
+        "archivos_pedidos": len(ARCHIVOS),
+        "ok": ok,
+        "nuevos": nuevos,
+        "huecos": huecos,
+        "run_id": os.getenv("GITHUB_RUN_ID", "local"),
+        "commit": os.getenv("GITHUB_SHA", "local"),
+        "entradas": entradas,
+    }
+
+    try:
+        clave_man = f"{PREFIJO}/manifiestos/{ahora:%Y/%m}/manifiesto_{sello}.json"
+        s3.put_object(
+            Bucket=bucket, Key=clave_man,
+            Body=json.dumps(manifiesto, ensure_ascii=False, sort_keys=True,
+                            indent=1, default=str).encode("utf-8"),
+            ContentType="application/json; charset=utf-8",
+        )
+        s3.put_object(
+            Bucket=bucket, Key=ESTADO,
+            Body=json.dumps(estado, ensure_ascii=False, sort_keys=True,
+                            indent=1, default=str).encode("utf-8"),
+            ContentType="application/json; charset=utf-8",
+        )
+    except Exception as e:
+        print(f"[indec] R2 fallo (manifiesto/estado): {type(e).__name__}: {e}")
+        return 3
+
+    print(f"[indec] {ok}/{len(ARCHIVOS)} OK · {nuevos} nuevos · {huecos} huecos")
+    print(f"[indec] manifiesto: {clave_man}")
+    if huecos:
+        print(f"⚠ {huecos} archivo(s) con hueco registrado. Revisar arriba cuales.")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
