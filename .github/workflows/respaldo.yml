@@ -1,16 +1,18 @@
 name: Guarismo respaldo (archivo sellado)
 
-# Respalda el archivo sellado completo como artifact de GitHub, fuera de
-# Supabase. Es el paso 1 de la estrategia de respaldo: cubre el activo más
-# valioso hoy, sin cuentas nuevas. El paso 2 (crudo a almacenamiento S3) va
-# aparte, porque el crudo pesa mucho más.
+# Respalda el archivo sellado (guarismo_historico) a Cloudflare R2, prefijo
+# archivo/. El artifact de GitHub queda como red SECUNDARIA: expira a los 90
+# dias, R2 no.
+#
+# EL RELOJ ES cron-job.org disparando workflow_dispatch. El bloque schedule
+# queda solo como red pasiva: el cron nativo de GitHub descarta corridas en
+# silencio y NO se cuenta con el. Al mirar Actions, filtrar por
+# workflow_dispatch.
 
 on:
   workflow_dispatch: {}
   schedule:
-    # Domingos 03:00 UTC (medianoche Argentina). Respaldo únicamente: el reloj
-    # real puede ir por cron-job.org si se quiere más control.
-    - cron: "0 3 * * 0"
+    - cron: "55 8 * * *"     # 05:55 ARG, best effort, NO se cuenta con esto
 
 jobs:
   respaldo:
@@ -22,16 +24,22 @@ jobs:
         with:
           python-version: "3.12"
 
-      - run: pip install requests
+      - run: pip install requests boto3
 
-      - name: Exportar el archivo sellado
+      - name: Exportar el archivo sellado y subirlo a R2
         env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_ANON: ${{ secrets.SUPABASE_ANON }}
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET: guarismo-crudo
         run: python exportar_archivo.py
 
-      - name: Subir como artifact
+      - name: Subir como artifact (red secundaria)
+        if: always()          # sube igual aunque R2 falle
         uses: actions/upload-artifact@v4
         with:
           name: archivo-sellado-${{ github.run_id }}
           path: respaldo/*.json
-          retention-days: 90        # GitHub guarda el artifact 90 días
+          retention-days: 90
