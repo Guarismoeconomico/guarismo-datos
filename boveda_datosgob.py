@@ -70,6 +70,12 @@ for _f in (sys.stdout, sys.stderr):
         pass
 
 DG_API = "https://apis.datos.gob.ar/series/api/series"
+
+# Guarismo se identifica en cada pedido. El conector ya lo hace ("Guarismo/1.0")
+# y este modulo tiene que decir lo mismo: una sola identidad hacia las fuentes.
+# Si un organismo se molesta por el volumen, que pueda escribir en vez de
+# bloquear en silencio.
+UA = {"User-Agent": "Guarismo/1.0 (+https://guarismo.com.ar; infoguarismo@gmail.com)"}
 PAGINA = 1000          # maximo que acepta la API (default 100)
 TIMEOUT = 60
 PAUSA = 0.4            # cortesia entre llamadas
@@ -120,7 +126,7 @@ def _pedir(params):
     ultimo = None
     for intento in range(REINTENTOS):
         try:
-            r = requests.get(DG_API, params=params, timeout=TIMEOUT)
+            r = requests.get(DG_API, params=params, headers=UA, timeout=TIMEOUT)
             r.raise_for_status()
             return r.json()
         except Exception as e:
