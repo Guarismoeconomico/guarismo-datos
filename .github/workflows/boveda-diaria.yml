@@ -1,14 +1,31 @@
-name: Guarismo boveda (snapshot datos.gob.ar)
+name: Guarismo boveda diaria
 
-# Snapshot diario COMPLETO de las series de datos.gob.ar a R2, prefijo
-# boveda/datosgob/. No toca Supabase ni la vitrina: es archivo point-in-time.
+# Corre TODOS los modulos de boveda de cadencia diaria en secuencia, con un
+# solo reloj.
 #
-# La API de datos.gob.ar SOBRESCRIBE con cada revision y no guarda vintages.
-# Lo que no se captura el dia que estaba, no se recupera nunca.
+# Por que agrupado por CADENCIA y no por fuente: un workflow por modulo son
+# doce relojes en dos meses, y el dia que se regenere el PAT hay que tocarlos
+# todos. Agrupado, sumar un modulo diario nuevo es UN PASO MAS en este archivo
+# y cero cronjobs nuevos.
+#
+# Cada modulo despues del primero lleva `if: always()`: que un modulo falle NO
+# puede impedir que corran los siguientes. Un modulo caido deja un hueco
+# registrado en su propio log; que ese hueco arrastre a los demas seria
+# multiplicar la perdida. El job igual queda en ROJO si algun paso fallo, asi
+# la alerta suena.
+#
+# Los modulos devuelven 0 con huecos (un hueco registrado es la conducta
+# correcta, no una falla), 1 si fallaron TODAS las fuentes, 3 si fallo R2.
 #
 # EL RELOJ ES cron-job.org disparando workflow_dispatch. El bloque schedule
 # queda solo como red pasiva: el cron nativo de GitHub descarta corridas en
-# silencio. Al mirar Actions, filtrar por workflow_dispatch.
+# silencio.
+#
+# OJO AL MIRAR ACTIONS: las corridas disparadas por cron-job.org aparecen como
+# "Manually run by Guarismoeconomico", porque el PAT es de esa cuenta. La UI de
+# GitHub NO distingue el reloj de un clic manual. Para saber si el reloj corrio
+# de verdad, se mira el HISTORIAL DE EJECUCIONES DE cron-job.org (HTTP 204 con
+# su hora), nunca esta pantalla.
 
 on:
   workflow_dispatch: {}
@@ -19,13 +36,17 @@ jobs:
   boveda:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
       - run: pip install requests boto3
+
+      # --- Modulos diarios, en secuencia -------------------------------------
+      # Para sumar uno nuevo: copiar un bloque, cambiar el name y el script.
+      # No hace falta cronjob nuevo.
 
       - name: Snapshot completo de datos.gob.ar a R2
         env:
@@ -34,3 +55,12 @@ jobs:
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           R2_BUCKET: guarismo-crudo
         run: python boveda_datosgob.py
+
+      - name: Capturar cuadros del INDEC a R2
+        if: always()          # corre aunque el modulo anterior haya fallado
+        env:
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET: guarismo-crudo
+        run: python boveda_indec.py
