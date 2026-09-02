@@ -64,3 +64,12 @@ jobs:
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           R2_BUCKET: guarismo-crudo
         run: python boveda_indec.py
+
+      - name: Capturar BCRA a R2 (catalogo + principales)
+        if: always()          # corre aunque los modulos anteriores hayan fallado
+        env:
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET: guarismo-crudo
+        run: python boveda_bcra.py
