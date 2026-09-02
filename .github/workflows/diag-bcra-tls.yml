@@ -1,1 +1,161 @@
+name: DIAG BCRA TLS (un solo uso)
 
+# Diagnostico de la cadena de certificados de api.bcra.gob.ar.
+#
+# NO usa secrets. NO escribe en R2 ni en Supabase. NO toca la vitrina.
+# Solo lee y reporta. Se corre UNA vez y se borra este archivo.
+#
+# La pregunta que responde: cuando el BCRA falla la verificacion TLS, ¿es
+# porque no manda el certificado intermedio? Si es eso, se le provee el
+# intermedio y la verificacion pasa a ser REAL (cadena completa + hostname),
+# y no hace falta elegir entre verificar y no verificar.
+
+on:
+  workflow_dispatch: {}
+
+jobs:
+  diag:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - run: pip install requests certifi cryptography
+
+      - name: Cuantos certificados manda el servidor
+        continue-on-error: true
+        run: |
+          echo "--- Cadena que el servidor ENVIA en el handshake ---"
+          echo | openssl s_client -connect api.bcra.gob.ar:443 \
+                   -servername api.bcra.gob.ar -showcerts 2>/dev/null \
+                 | grep -E "^ *[0-9]+ s:|^ *i:|Verify return code" || true
+          echo
+          echo "--- Cantidad de certificados enviados ---"
+          echo | openssl s_client -connect api.bcra.gob.ar:443 \
+                   -servername api.bcra.gob.ar -showcerts 2>/dev/null \
+                 | grep -c "BEGIN CERTIFICATE" || true
+
+      - name: Diagnostico completo y prueba del arreglo
+        continue-on-error: true
+        run: |
+          python - <<'PY'
+          import hashlib, socket, ssl, sys
+          import certifi, requests
+          from cryptography import x509
+          from cryptography.hazmat.primitives import hashes as ch
+
+          HOST = "api.bcra.gob.ar"
+          URLS = [
+              "https://api.bcra.gob.ar/estadisticas/v4.0/monetarias",
+              "https://api.bcra.gob.ar/estadisticascambiarias/v1.0/Cotizaciones",
+          ]
+          UA = {"User-Agent": "Guarismo/1.0 (+https://guarismo.com.ar; infoguarismo@gmail.com)"}
+
+          def linea(t):
+              print("\n" + "=" * 68)
+              print(t)
+              print("=" * 68)
+
+          # ---- 1. Verificacion por defecto (certifi) --------------------------
+          linea("1) PELDANO 1 — verificacion por defecto (certifi)")
+          peldano1 = False
+          for u in URLS:
+              try:
+                  r = requests.get(u, timeout=30, headers=UA)
+                  print(f"   OK   {r.status_code}  {u}")
+                  peldano1 = True
+              except Exception as e:
+                  print(f"   FALLA  {u}")
+                  print(f"          {type(e).__name__}: {str(e)[:300]}")
+
+          # ---- 2. Certificado hoja que presenta el servidor -------------------
+          linea("2) CERTIFICADO HOJA que presenta el servidor")
+          ctx = ssl.create_default_context()
+          ctx.check_hostname = False
+          ctx.verify_mode = ssl.CERT_NONE
+          der = None
+          try:
+              with socket.create_connection((HOST, 443), timeout=30) as s:
+                  with ctx.wrap_socket(s, server_hostname=HOST) as ss:
+                      der = ss.getpeercert(binary_form=True)
+                      print(f"   Protocolo: {ss.version()}   Cifrado: {ss.cipher()[0]}")
+          except Exception as e:
+              print(f"   No se pudo abrir el socket: {type(e).__name__}: {e}")
+
+          aia = []
+          if der:
+              print(f"   sha256 del cert hoja: {hashlib.sha256(der).hexdigest()}")
+              c = x509.load_der_x509_certificate(der)
+              print(f"   Subject : {c.subject.rfc4514_string()}")
+              print(f"   Issuer  : {c.issuer.rfc4514_string()}")
+              print(f"   Valido  : {c.not_valid_before_utc} -> {c.not_valid_after_utc}")
+              try:
+                  san = c.extensions.get_extension_for_class(
+                      x509.SubjectAlternativeName).value.get_values_for_type(x509.DNSName)
+                  print(f"   SAN     : {san}")
+              except Exception:
+                  print("   SAN     : (sin extension SAN)")
+              try:
+                  ext = c.extensions.get_extension_for_class(
+                      x509.AuthorityInformationAccess).value
+                  aia = [d.access_location.value for d in ext
+                         if d.access_method == x509.oid.AuthorityInformationAccessOID.CA_ISSUERS]
+              except Exception:
+                  pass
+              print(f"   AIA caIssuers (de donde bajar el intermedio): {aia or 'NO DECLARADO'}")
+
+          # ---- 3. LA PRUEBA QUE DECIDE: certifi + intermedio ------------------
+          linea("3) PELDANO 2 — certifi + el intermedio que el servidor NO manda")
+          if peldano1:
+              print("   Innecesario: el peldano 1 ya verifica. El BCRA arreglo su cadena.")
+          elif not aia:
+              print("   NO SE PUEDE PROBAR: el cert no declara AIA caIssuers.")
+              print("   -> el intermedio habria que conseguirlo a mano.")
+          else:
+              url_int = aia[0]
+              try:
+                  raw = requests.get(url_int, timeout=30, headers=UA).content
+                  try:
+                      inter = x509.load_der_x509_certificate(raw)
+                  except Exception:
+                      inter = x509.load_pem_x509_certificate(raw)
+                  pem = inter.public_bytes(
+                      __import__("cryptography.hazmat.primitives.serialization",
+                                 fromlist=["Encoding"]).Encoding.PEM)
+                  print(f"   Intermedio bajado de: {url_int}")
+                  print(f"   Subject: {inter.subject.rfc4514_string()}")
+                  print(f"   sha256 del intermedio: "
+                        f"{inter.fingerprint(ch.SHA256()).hex()}")
+
+                  with open("bundle.pem", "wb") as f:
+                      f.write(open(certifi.where(), "rb").read())
+                      f.write(b"\n")
+                      f.write(pem)
+
+                  ok = False
+                  for u in URLS:
+                      try:
+                          r = requests.get(u, timeout=30, headers=UA, verify="bundle.pem")
+                          print(f"   OK   {r.status_code}  {u}   <-- VERIFICACION REAL")
+                          ok = True
+                      except Exception as e:
+                          print(f"   FALLA  {u}")
+                          print(f"          {type(e).__name__}: {str(e)[:300]}")
+                  print()
+                  print("   >>> VEREDICTO: PELDANO 2 VIABLE." if ok else
+                        "   >>> VEREDICTO: el intermedio NO alcanza. Hay otra cosa rota.")
+              except Exception as e:
+                  print(f"   No se pudo bajar/usar el intermedio: {type(e).__name__}: {e}")
+
+          # ---- 4. Referencia: como se conecta hoy la vitrina ------------------
+          linea("4) REFERENCIA — verify=False (lo que hace hoy el conector)")
+          import urllib3
+          urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+          for u in URLS:
+              try:
+                  r = requests.get(u, timeout=30, headers=UA, verify=False)
+                  print(f"   OK   {r.status_code}  {u}")
+              except Exception as e:
+                  print(f"   FALLA  {u}  {type(e).__name__}: {str(e)[:200]}")
+          PY
