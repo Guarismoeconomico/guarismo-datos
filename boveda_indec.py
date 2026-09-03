@@ -200,6 +200,80 @@ ARCHIVOS = {
         "desc": "Metodologia de indices de precios y cantidades del comercio exterior. "
                 "URL citada en informes del ICA — confirmar en el primer manifiesto.",
     },
+
+    # --- Tier 2: redeterminacion de obra publica (el comprador #2) --------
+    # Regimen vigente: Dec. 490/2023, que sustituyo al 691/2016, que a su vez
+    # reemplazo la metodologia del 1295/2002. El INDEC sigue rotulando sus
+    # cuadros "Dec. 1295/02" porque la estructura de indices es la de 2002.
+    # En las tres versiones los precios de referencia son los del INDEC.
+    #
+    # El ICC nace provisorio TODOS los meses: la nota al pie de cada informe
+    # declara que capataz y seguro ART entran despues del cierre mensual, lo
+    # que incide en la provisoriedad del capitulo Mano de obra y, por arrastre,
+    # del nivel general. Ese par provisorio/definitivo es el producto.
+    #
+    # OJO: el cuadro VIVO del art. 15 vive detras de un link dinamico
+    # (bajarCuadroEstadistico.asp?idc=<hash>) y NO se puede cablear aca.
+    # Va por mecanica D. Los 9 archivos SH-ICC-* de serie historica terminan
+    # en octubre de 2015 — son backfill Clase B, bloque aparte.
+    "sipm_series": {
+        "url": "https://www.indec.gob.ar/ftp/cuadros/economia/series_sipm_dic2015.xls",
+        "ext": "xls",
+        "desc": "SIPM. Series completas de IPIM, IPIB e IPP desde diciembre 2015. El "
+                "IPIB es el insumo del articulo 15 del regimen de redeterminacion de "
+                "obra publica. URL fija citada al pie de cada informe del SIPM.",
+    },
+    "sipm_metodologia": {
+        "url": "https://www.indec.gob.ar/ftp/cuadros/economia/metodologia1_8_sipm.pdf",
+        "ext": "pdf",
+        "desc": "Metodologia del SIPM. Documenta la formula Laspeyres de ponderaciones "
+                "fijas base 1993 y el origen de los ponderadores (Censo Nacional "
+                "Economico 1994).",
+    },
+    "icc_metodologia": {
+        "url": "https://www.indec.gob.ar/ftp/cuadros/economia/metodologia_icc.pdf",
+        "ext": "pdf",
+        "desc": "Metodologia del ICC en el Gran Buenos Aires, base 1993=100. Es la "
+                "unica URL fija que el informe del ICC publica: los cuadros del "
+                "regimen de redeterminacion no tienen URL directa.",
+    },
+
+    # --- Tier 2: salarios -------------------------------------------------
+    # ATENCION: estos NO viven en /ftp/cuadros/economia/ sino en
+    # /ftp/cuadros/sociedad/. Es el unico bloque fuera de economia.
+    "salarios_indice": {
+        "url": "https://www.indec.gob.ar/ftp/cuadros/sociedad/indice_salarios.csv",
+        "ext": "csv",
+        "desc": "Indice de salarios. Serie historica desde octubre 2015, formato csv. "
+                "El componente privado NO registrado se estima y se revisa: es la "
+                "parte con vintage real de toda la familia laboral.",
+    },
+    "salarios_variacion": {
+        "url": "https://www.indec.gob.ar/ftp/cuadros/sociedad/variacion_indice_salarios.csv",
+        "ext": "csv",
+        "desc": "Indice de salarios. Variaciones porcentuales por sector, serie "
+                "historica en csv.",
+    },
+    "salarios_metadatos": {
+        "url": "https://www.indec.gob.ar/ftp/cuadros/sociedad/metadatos_series_salarios.txt",
+        "ext": "txt",
+        "desc": "Indice de salarios. Metadatos de las series. Gemelo de "
+                "ipc_serie_metadatos: un cambio aca es un cambio de definicion, "
+                "no de dato.",
+    },
+    "salarios_cvs_diarios": {
+        "url": "https://www.indec.gob.ar/ftp/cuadros/sociedad/sh_cvs_diarios_{anio}.xls",
+        "ext": "xls",
+        "desc": "Coeficiente de variacion salarial, serie DIARIA, base 31 de octubre "
+                "2016=100. Patron (b): el anio va adentro del nombre, lo resuelve "
+                "urls_candidatas() con caida al anio anterior.",
+    },
+    "salarios_metodologia": {
+        "url": "https://www.indec.gob.ar/ftp/cuadros/sociedad/cvs_metodologia.pdf",
+        "ext": "pdf",
+        "desc": "Metodologia del coeficiente de variacion salarial. Declara el rezago "
+                "de cinco meses del indice mensual construido a partir de la EPH.",
+    },
 }
 
 # Tipo de contenido por extension. Se declara al subir a R2 para que el objeto
