@@ -4,9 +4,9 @@
 boveda_indec.py — Captura los cuadros publicados del INDEC a la boveda.
 
 POR QUE EXISTE
-    El INDEC publica sus series como archivos Excel en URL FIJA y los
-    SOBRESCRIBE en cada publicacion, conservando el mismo nombre. La URL no
-    cambia; el contenido si. Nadie guarda las versiones viejas.
+    El INDEC publica sus series como archivos Excel y los SOBRESCRIBE en cada
+    publicacion, conservando el mismo nombre. La URL no cambia; el contenido
+    si. Nadie guarda las versiones viejas.
 
     El EMAE es el caso extremo: la serie desestacionalizada se re-estima ENTERA
     con cada dato nuevo. La propia metodologia del INDEC lo declara (Metodologia
@@ -14,6 +14,16 @@ POR QUE EXISTE
     medida que se agregan observaciones trimestrales.
 
     Lo que no se captura el dia que estaba, no se recupera nunca.
+
+TRES PATRONES DE URL, NO UNO — verificado el 3-sep-2026
+    (a) Fija de verdad: sh_emae_mensual_base2004.xls. El caso ideal.
+    (b) Con el año adentro: sh_isac_2026.xls. Fija doce meses y despues rota.
+        Se escribe {anio} y lo resuelve urls_candidatas() — automatico, para
+        que nadie tenga que editar el diccionario cada enero.
+    (c) Con la FECHA DE PUBLICACION adentro: ica_cuadros_20_07_26.xls, donde el
+        20 es el dia en que salio el informe y cambia mes a mes. Esa URL no se
+        puede construir. El ICA, el IPC mensual y los cuadros de supermercados
+        caen aca y NO entran a este modulo: son mecanica D, scraping.
 
 QUE HACE
     Baja cada archivo, lo hashea, y lo sube a R2 SOLO SI CAMBIO respecto de la
@@ -77,9 +87,23 @@ ESTADO = "_estado/indec_hashes.json"
 
 UA = {"User-Agent": "Guarismo/1.0 (+https://guarismo.com.ar; infoguarismo@gmail.com)"}
 
-# URLs ESTABLES, verificadas: aparecen citadas sin cambios en los informes de
-# prensa del EMAE de 2020, 2021, 2025 y 2026. El hash aleatorio del INDEC
-# afecta a los PDF de prensa (uploads/informesdeprensa/), NO a estos cuadros.
+# URLs verificadas sobre informes de prensa oficiales. El hash aleatorio del
+# INDEC afecta a los PDF de prensa (uploads/informesdeprensa/), NO a estos
+# cuadros. Pero hay DOS patrones distintos y conviene no confundirlos:
+#
+#   (a) URL fija de verdad, sin fecha en el nombre. Se sobrescribe en cada
+#       publicacion conservando el nombre. Es el caso ideal.
+#   (b) URL con el AÑO adentro (sh_isac_2026.xls). Fija durante doce meses y
+#       despues rota. Se escribe {anio} y lo resuelve urls_candidatas().
+#
+# Hay un tercer patron que NO entra aca: los cuadros del ICA llevan el DIA DE
+# PUBLICACION en el nombre (ica_cuadros_20_07_26.xls, y el 20 cambia mes a mes
+# porque el ICA sale entre el 18 y el 22). Esa URL no se puede construir: hay
+# que ir a buscarla. Es mecanica D — scraping de listado — y no este modulo.
+#
+# NOTA SOBRE EL IPC: se captura y se hashea. ARCHIVAR NO ES PUBLICAR. Nada de
+# esto sale a ninguna pantalla como afirmacion propia de Guarismo. Misma regla
+# intocable que los ids 27/28/29 de boveda_bcra.py.
 ARCHIVOS = {
     "emae_mensual": {
         "url": "https://www.indec.gob.ar/ftp/cuadros/economia/sh_emae_mensual_base2004.xls",
@@ -97,6 +121,79 @@ ARCHIVOS = {
         "ext": "pdf",
         "desc": "Metodologia INDEC N 20 — EMAE base 2004, agosto 2016. ISSN 2545-7179.",
     },
+
+    # --- Tier 1: desestacionalizadas que se re-estiman con cada dato ------
+    # Patron (b): el año va adentro del nombre.
+    "ipi_manufacturero": {
+        "url": "https://www.indec.gob.ar/ftp/cuadros/economia/sh_ipi_manufacturero_{anio}.xls",
+        "ext": "xls",
+        "desc": "IPI manufacturero. Serie original, desestacionalizada y tendencia-ciclo, "
+                "base 2004=100, nivel general y divisiones, desde enero 2016.",
+    },
+    "isac": {
+        "url": "https://www.indec.gob.ar/ftp/cuadros/economia/sh_isac_{anio}.xls",
+        "ext": "xls",
+        "desc": "ISAC. Indicador sintetico de la actividad de la construccion. Serie "
+                "original, desestacionalizada y tendencia-ciclo, desde enero 2012.",
+    },
+    "ipi_metodologia": {
+        "url": "https://www.indec.gob.ar/ftp/cuadros/economia/metodologia_ipi_manufacturero_2019.pdf",
+        "ext": "pdf",
+        "desc": "Metodologia del IPI manufacturero, 2019. Documenta X-11 de X-13ARIMA-SEATS "
+                "y el metodo H13 para tendencia-ciclo.",
+    },
+
+    # --- Tier 4: cuadros completos del IPC, todos con URL fija de verdad --
+    "ipc_aperturas": {
+        "url": "https://www.indec.gob.ar/ftp/cuadros/economia/sh_ipc_aperturas.xls",
+        "ext": "xls",
+        "desc": "IPC. Series de las principales aperturas regionales desde diciembre 2016.",
+    },
+    "ipc_precios_promedio": {
+        "url": "https://www.indec.gob.ar/ftp/cuadros/economia/sh_ipc_precios_promedio.xls",
+        "ext": "xls",
+        "desc": "IPC. Serie de precios promedio.",
+    },
+    "ipc_serie_aperturas": {
+        "url": "https://www.indec.gob.ar/ftp/cuadros/economia/serie_ipc_aperturas.csv",
+        "ext": "csv",
+        "desc": "IPC. Serie historica de aperturas, formato csv.",
+    },
+    "ipc_serie_divisiones": {
+        "url": "https://www.indec.gob.ar/ftp/cuadros/economia/serie_ipc_divisiones.csv",
+        "ext": "csv",
+        "desc": "IPC. Serie historica por division, formato csv.",
+    },
+    "ipc_serie_metadatos": {
+        "url": "https://www.indec.gob.ar/ftp/cuadros/economia/serie_ipc_metadatos.txt",
+        "ext": "txt",
+        "desc": "IPC. Metadatos de las series. Un cambio aca es un cambio de definicion: "
+                "vale tanto como el dato.",
+    },
+
+    # --- Sector externo ---------------------------------------------------
+    "bdp_servicios_pais": {
+        "url": "https://www.indec.gob.ar/ftp/cuadros/economia/Base_servicios_internacionales_trim_pais.csv",
+        "ext": "csv",
+        "desc": "Balanza de pagos. Servicios trimestrales por rubro y pais. "
+                "URL verificada sobre informe de 2025 — confirmar en el primer manifiesto.",
+    },
+    "comex_metodologia_precios": {
+        "url": "https://www.indec.gob.ar/ftp/cuadros/economia/metodologia_preciosycantidades.pdf",
+        "ext": "pdf",
+        "desc": "Metodologia de indices de precios y cantidades del comercio exterior. "
+                "URL citada en informes del ICA — confirmar en el primer manifiesto.",
+    },
+}
+
+# Tipo de contenido por extension. Se declara al subir a R2 para que el objeto
+# se pueda abrir despues sin adivinar.
+TIPOS = {
+    "pdf": "application/pdf",
+    "xls": "application/vnd.ms-excel",
+    "xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "csv": "text/csv; charset=utf-8",
+    "txt": "text/plain; charset=utf-8",
 }
 
 
@@ -121,20 +218,65 @@ def _cliente():
     )
 
 
+class NoEsta(Exception):
+    """404 — el archivo no esta en esa URL. No tiene sentido reintentar."""
+
+
 def bajar(url):
-    """Descarga binaria con reintentos. Devuelve (bytes, headers)."""
+    """Descarga binaria con reintentos. Devuelve (bytes, headers).
+
+    Un 404 corta de inmediato: reintentarlo es tiempo perdido, y ademas es la
+    señal que necesita urls_candidatas() para pasar al año anterior.
+    """
     ultimo = None
     for intento in range(REINTENTOS):
         try:
             r = requests.get(url, headers=UA, timeout=TIMEOUT)
+            if r.status_code == 404:
+                raise NoEsta(f"404 — no existe {url}")
             r.raise_for_status()
             if not r.content:
                 raise ValueError("respuesta vacia")
             return r.content, dict(r.headers)
+        except NoEsta:
+            raise
         except Exception as e:
             ultimo = e
             if intento < REINTENTOS - 1:
                 time.sleep(2.0 * (intento + 1))
+    raise ultimo
+
+
+def urls_candidatas(url):
+    """Resuelve {anio} en la URL. Devuelve los candidatos, en orden.
+
+    POR QUE
+        Varios cuadros del INDEC llevan el año en el nombre: sh_isac_2026.xls,
+        sh_ipi_manufacturero_2026.xls. Son estables doce meses y despues rotan.
+        Dejar el año escrito a mano significaria que el 1 de enero el modulo
+        empieza a devolver 404 hasta que alguien se acuerde de editarlo. Eso es
+        mantenimiento manual, y en este proyecto lo que no es automatico no va.
+
+        Se prueba el año corriente y, si no esta, el anterior. En enero eso
+        cubre la ventana real: el informe de diciembre puede seguir apuntando
+        al archivo del año viejo durante algunas semanas.
+    """
+    if "{anio}" not in url:
+        return [url]
+    anio = datetime.now(timezone.utc).year
+    return [url.replace("{anio}", str(anio)),
+            url.replace("{anio}", str(anio - 1))]
+
+
+def bajar_resolviendo(url_cfg):
+    """Baja probando los candidatos. Devuelve (bytes, headers, url_usada)."""
+    ultimo = None
+    for u in urls_candidatas(url_cfg):
+        try:
+            datos, headers = bajar(u)
+            return datos, headers, u
+        except Exception as e:
+            ultimo = e
     raise ultimo
 
 
@@ -167,15 +309,18 @@ def main():
 
     for clave, cfg in sorted(ARCHIVOS.items()):
         capturado = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        url_usada = cfg["url"]
         try:
-            datos, headers = bajar(cfg["url"])
+            datos, headers, url_usada = bajar_resolviendo(cfg["url"])
             sha = hashlib.sha256(datos).hexdigest()
             previo = (estado.get(clave) or {}).get("sha256")
             cambio = (sha != previo)
 
             entrada = {
                 "archivo": clave,
-                "url": cfg["url"],
+                # La URL efectivamente descargada, que es lo que importa
+                # notarialmente. Si la plantilla tenia año, queda la resuelta.
+                "url": url_usada,
                 "descripcion": cfg["desc"],
                 "capturado_utc": capturado,
                 "bytes": len(datos),
@@ -184,20 +329,25 @@ def main():
                 "http_date": headers.get("Date"),
                 "last_modified": headers.get("Last-Modified"),
                 "etag": headers.get("ETag"),
+                # Se REGISTRA, no decide nada. Si un dia el INDEC devuelve una
+                # pagina de error con 200, el content-type lo delata y queda
+                # la evidencia fechada en el manifiesto.
+                "content_type": headers.get("Content-Type"),
                 "cambio": cambio,
             }
+            if url_usada != cfg["url"]:
+                entrada["url_plantilla"] = cfg["url"]
 
             if cambio:
                 nombre = f"{clave}_{sello}.{cfg['ext']}"
                 obj = f"{PREFIJO}/{ahora:%Y/%m}/{nombre}"
                 s3.put_object(
                     Bucket=bucket, Key=obj, Body=datos,
-                    ContentType=("application/pdf" if cfg["ext"] == "pdf"
-                                 else "application/vnd.ms-excel"),
+                    ContentType=TIPOS.get(cfg["ext"], "application/octet-stream"),
                     Metadata={
                         "sha256": sha,
                         "origen": "boveda-indec",
-                        "url": cfg["url"][:900],
+                        "url": url_usada[:900],
                         "capturado-utc": capturado,
                     },
                 )
@@ -210,23 +360,23 @@ def main():
                 estado[clave] = {"sha256": sha, "objeto": obj, "visto_utc": capturado}
                 nuevos += 1
                 marca = "NUEVO  →" if previo else "PRIMERA→"
-                print(f"   [indec] {clave:<18} {marca} {len(datos):>8} bytes  {sha[:12]}…")
+                print(f"   [indec] {clave:<26} {marca} {len(datos):>8} bytes  {sha[:12]}…")
             else:
                 # Sin cambios: no se re-sube el binario, pero el manifiesto de
                 # hoy deja constancia de que seguia diciendo lo mismo.
                 entrada["objeto"] = (estado.get(clave) or {}).get("objeto")
-                print(f"   [indec] {clave:<18} sin cambios {len(datos):>8} bytes  {sha[:12]}…")
+                print(f"   [indec] {clave:<26} sin cambios {len(datos):>8} bytes  {sha[:12]}…")
 
             ok += 1
         except Exception as e:
             entrada = {
                 "archivo": clave,
-                "url": cfg["url"],
+                "url": url_usada,
                 "capturado_utc": capturado,
                 "error": f"{type(e).__name__}: {e}",
             }
             huecos += 1
-            print(f"   [indec] {clave:<18} HUECO — {type(e).__name__}: {e}")
+            print(f"   [indec] {clave:<26} HUECO — {type(e).__name__}: {e}")
 
         entradas.append(entrada)
         time.sleep(PAUSA)
