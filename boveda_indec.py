@@ -235,14 +235,46 @@ def _cliente():
 
 
 class NoEsta(Exception):
-    """404 — el archivo no esta en esa URL. No tiene sentido reintentar."""
+    """El archivo no esta en esa URL. No tiene sentido reintentar."""
 
 
-def bajar(url):
-    """Descarga binaria con reintentos. Devuelve (bytes, headers).
+def _es_html(datos, headers):
+    """¿La respuesta es una pagina web en vez del archivo que pedimos?
+
+    EL CASO REAL — verificado en el navegador el 3-sep-2026
+        Se pidio sh_oferta_demanda_09_26.xls, un cuadro que el INDEC todavia no
+        publico. El servidor NO devolvio 404: REDIRIGIO a
+        indec.gob.ar/indec/web/Error-Default y sirvio esa pagina con estado 2xx.
+        La pagina dice "ERROR 404" en el texto, pero el codigo HTTP no.
+
+        Resultado: el modulo bajo 37 KB de HTML, los hasheo y los archivo como
+        si fueran una planilla. Los dos cuadros del PIB quedaron con IDENTICO
+        sha256, que es imposible entre el original y el desestacionalizado.
+        Es el peor modo de falla de un archivo notarial: no un hueco, sino un
+        dato falso con fecha y sello.
+
+        Y no afectaba solo al PIB. Sin esta guarda, TODA la resolucion de fecha
+        ({anio} y {trim}) era decorativa: el candidato inexistente nunca
+        fallaba, asi que nunca se caia al periodo anterior.
+
+    Se detecta por dos vias independientes — el Content-Type declarado y la
+    cabeza del contenido — porque cualquiera de las dos puede mentir sola.
+    """
+    if "html" in (headers.get("Content-Type") or "").lower():
+        return True
+    cabeza = datos[:2048].lstrip().lower()
+    return (cabeza.startswith(b"<!doctype")
+            or cabeza.startswith(b"<html")
+            or b"<html" in cabeza[:1024])
+
+
+def bajar(url, ext="bin"):
+    """Descarga binaria con reintentos. Devuelve (bytes, headers, url_final).
 
     Un 404 corta de inmediato: reintentarlo es tiempo perdido, y ademas es la
-    señal que necesita urls_candidatas() para pasar al año anterior.
+    señal que necesita urls_candidatas() para pasar al periodo anterior. Una
+    pagina HTML donde esperabamos un archivo se trata IGUAL que un 404, porque
+    es lo que el INDEC devuelve en vez de un 404.
     """
     ultimo = None
     for intento in range(REINTENTOS):
@@ -253,7 +285,12 @@ def bajar(url):
             r.raise_for_status()
             if not r.content:
                 raise ValueError("respuesta vacia")
-            return r.content, dict(r.headers)
+            if ext != "html" and _es_html(r.content, r.headers):
+                raise NoEsta(
+                    f"el servidor devolvio una pagina HTML de {len(r.content)} "
+                    f"bytes en vez de un .{ext} (destino final: {r.url}). "
+                    f"El archivo no esta publicado.")
+            return r.content, dict(r.headers), r.url
         except NoEsta:
             raise
         except Exception as e:
@@ -318,13 +355,19 @@ def urls_candidatas(url):
             url.replace("{anio}", str(anio - 1))]
 
 
-def bajar_resolviendo(url_cfg):
-    """Baja probando los candidatos. Devuelve (bytes, headers, url_usada)."""
+def bajar_resolviendo(cfg):
+    """Baja probando los candidatos. Devuelve (bytes, headers, pedida, final).
+
+    'pedida' es la URL que resolvimos del diccionario; 'final' es donde termino
+    el pedido despues de redirects. Se registran las dos porque si el INDEC
+    redirige, eso es un hecho de la fuente y va al manifiesto.
+    """
+    ext = cfg.get("ext", "bin")
     ultimo = None
-    for u in urls_candidatas(url_cfg):
+    for u in urls_candidatas(cfg["url"]):
         try:
-            datos, headers = bajar(u)
-            return datos, headers, u
+            datos, headers, final = bajar(u, ext)
+            return datos, headers, u, final
         except Exception as e:
             ultimo = e
     raise ultimo
@@ -361,7 +404,7 @@ def main():
         capturado = datetime.now(timezone.utc).isoformat(timespec="seconds")
         url_usada = cfg["url"]
         try:
-            datos, headers, url_usada = bajar_resolviendo(cfg["url"])
+            datos, headers, url_usada, url_final = bajar_resolviendo(cfg)
             sha = hashlib.sha256(datos).hexdigest()
             previo = (estado.get(clave) or {}).get("sha256")
             cambio = (sha != previo)
@@ -387,6 +430,9 @@ def main():
             }
             if url_usada != cfg["url"]:
                 entrada["url_plantilla"] = cfg["url"]
+            if url_final and url_final != url_usada:
+                # El INDEC redirigio. Es un hecho de la fuente: se registra.
+                entrada["url_final"] = url_final
 
             if cambio:
                 nombre = f"{clave}_{sello}.{cfg['ext']}"
