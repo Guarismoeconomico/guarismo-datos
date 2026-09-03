@@ -37,10 +37,25 @@ NOTA SOBRE EL RELOJ (13 jul 2026)
 """
 
 import json, os, sys, datetime as dt
-import requests, urllib3
+import requests
 
-VERIFY_BCRA = False
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+# TLS del BCRA — resuelto el 2-sep-2026, sacado el 3-sep-2026.
+#
+# Durante meses acá vivió VERIFY_BCRA = False, por una cadena de certificados
+# del BCRA historicamente mal armada, mas urllib3.disable_warnings() para que
+# no gritara. Se diagnostico desde el runner: el BCRA VERIFICA BIEN con
+# certifi por defecto. No falta el intermedio, no hay cadena rota, no hace
+# falta escalera. La bandera no tenia justificacion.
+#
+# Ahora los pedidos al BCRA van con la verificacion por defecto de requests,
+# igual que todas las demas fuentes. Si algun dia la verificacion falla, la
+# tarea devuelve {"error": ...} y la app no muestra el dato — que es la
+# conducta correcta. Un producto cuyo diferencial es la confianza no puede
+# hablar con su fuente principal por un canal no autenticado.
+#
+# Certificado observado el 2-sep-2026: Sectigo Public Server Authentication
+# CA OV R36, vigente hasta el 25-feb-2027. Al renovarse cambia la huella, y
+# la boveda lo registra sola.
 TIMEOUT = 20
 UA = {"User-Agent": "Guarismo/1.0"}
 
@@ -130,7 +145,7 @@ BCRA_MATCH = {
 }
 
 def bcra_monetarias():
-    variables = get(BCRA_MON, verify=VERIFY_BCRA).get("results", [])
+    variables = get(BCRA_MON).get("results", [])
     prev = _prev("oficial").get("bcra_monetarias") or {}
     out = {}
     for clave, palabras in BCRA_MATCH.items():
@@ -159,7 +174,7 @@ def bcra_monetarias():
     return out
 
 def bcra_dolar_oficial():
-    d = get(BCRA_FX, verify=VERIFY_BCRA)["results"]
+    d = get(BCRA_FX)["results"]
     fecha = d.get("fecha")
     usd = next((x for x in d.get("detalle", [])
                 if x.get("codigoMoneda") == "USD"), None)
