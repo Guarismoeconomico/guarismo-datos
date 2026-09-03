@@ -18,9 +18,9 @@ jobs:
   respaldo:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
@@ -38,7 +38,7 @@ jobs:
 
       - name: Subir como artifact (red secundaria)
         if: always()          # sube igual aunque R2 falle
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: archivo-sellado-${{ github.run_id }}
           path: respaldo/*.json
