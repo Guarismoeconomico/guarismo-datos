@@ -1067,22 +1067,29 @@ def _breaking(bid, text, source, prioridad, metric=None, valor=None,
     if esperado is not None: it["esperado"] = esperado
     return it
 
+def _con_zona(iso):
+    """Parsea un published_at y le garantiza zona. Devuelve datetime o None.
+
+    Un published_at escrito ANTES del fix de zona viene sin offset y era UTC
+    (el runner corre en UTC). Se normaliza siempre que se lee, porque el
+    breaking del día se arrastra de corrida en corrida sin volver a crearse:
+    si no se normalizara al leerlo, seguiría sin zona hasta expirar y la app
+    le seguiría mostrando la hora corrida."""
+    try:
+        d = dt.datetime.fromisoformat(iso)
+    except Exception:
+        return None
+    return d if d.tzinfo is not None else d.replace(tzinfo=dt.timezone.utc)
+
 def _vigente(item):
     """True hasta las 23:59:59 HORA ARGENTINA del día de publicación.
 
     Antes comparaba naive contra naive y, como el runner corre en UTC, el corte
     caía a las 23:59:59 UTC = 21:00 ARG: el breaking se apagaba tres horas antes
-    de medianoche. Ahora el día se cierra en hora argentina.
-
-    Acepta published_at CON zona (formato nuevo) y SIN zona (formato viejo, que
-    se escribía en UTC sin declararlo). Sin esa tolerancia, la primera corrida
-    después del deploy reventaría al comparar un aware contra un naive."""
-    try:
-        pub = dt.datetime.fromisoformat(item["published_at"])
-    except Exception:
+    de medianoche. Ahora el día se cierra en hora argentina."""
+    pub = _con_zona((item or {}).get("published_at", ""))
+    if pub is None:
         return False
-    if pub.tzinfo is None:                    # legado: venía en UTC sin declarar
-        pub = pub.replace(tzinfo=dt.timezone.utc)
     fin = pub.astimezone(TZ_AR).replace(hour=23, minute=59, second=59,
                                         microsecond=0)
     return dt.datetime.now(dt.timezone.utc) <= fin
@@ -1118,6 +1125,14 @@ def _cruce_bidir(prev, cur, paso):
 def detectar_breaking(r, rem_data):
     """Devuelve UN breaking (o None). Prioriza agendados sobre umbrales."""
     prev = _prev("breaking")
+    # Normalizar la hora heredada: los dos caminos de abajo (mantener el del día
+    # y conservar la hora del mismo evento) arrastran published_at tal cual. Si
+    # viene de antes del fix de zona, sin esto se arrastra sin offset hasta que
+    # expire y la app le sigue mostrando la hora de UTC.
+    if isinstance(prev, dict) and prev.get("published_at"):
+        _d = _con_zona(prev["published_at"])
+        if _d is not None:
+            prev["published_at"] = _d.isoformat(timespec="seconds")
     cand = []
 
     # 1) AGENDADO — Inflación (INDEC). Sale ~día 14. valencia: menos es mejor.
