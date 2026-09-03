@@ -143,6 +143,22 @@ ARCHIVOS = {
                 "y el metodo H13 para tendencia-ciclo.",
     },
 
+    # --- Tier 1: PIB trimestral. La serie del cupon PBI -------------------
+    # Patron (c) predecible: el mes de PUBLICACION (03/06/09/12) va adentro.
+    "pib_oferta_demanda": {
+        "url": "https://www.indec.gob.ar/ftp/cuadros/economia/sh_oferta_demanda_{trim}.xls",
+        "ext": "xls",
+        "desc": "PIB. Series trimestrales de oferta y demanda globales, serie original, "
+                "desde 2004. Informe de avance del nivel de actividad.",
+    },
+    "pib_oferta_demanda_desest": {
+        "url": "https://www.indec.gob.ar/ftp/cuadros/economia/sh_oferta_demanda_desest_{trim}.xls",
+        "ext": "xls",
+        "desc": "PIB. Series trimestrales DESESTACIONALIZADAS de oferta y demanda "
+                "globales. Es la que se re-estima entera con cada publicacion: la mas "
+                "irrecuperable de las dos.",
+    },
+
     # --- Tier 4: cuadros completos del IPC, todos con URL fija de verdad --
     "ipc_aperturas": {
         "url": "https://www.indec.gob.ar/ftp/cuadros/economia/sh_ipc_aperturas.xls",
@@ -247,20 +263,54 @@ def bajar(url):
     raise ultimo
 
 
+def _trimestres_publicacion(hoy=None):
+    """Los dos ultimos meses de publicacion trimestral, como (mm, aa).
+
+    El INDEC publica el Informe de avance del nivel de actividad en marzo,
+    junio, septiembre y diciembre, cerca del dia 20. El nombre del cuadro lleva
+    el MES DE PUBLICACION, no el trimestre del dato: el 1er trimestre de 2026
+    salio como sh_oferta_demanda_06_26.xls. Verificado sobre cinco ediciones
+    (12_25, 03_26, 06_26, 06_25, 06_24) el 3-sep-2026.
+
+    Se devuelven DOS candidatos a proposito: durante las tres primeras semanas
+    del mes de publicacion el archivo nuevo todavia no existe, y el vigente es
+    el del trimestre anterior. Sin el segundo candidato quedaria un hueco
+    inventado tres semanas por trimestre.
+    """
+    hoy = hoy or datetime.now(timezone.utc)
+    anio, mes = hoy.year, (hoy.month // 3) * 3
+    if mes == 0:                      # enero y febrero miran a diciembre
+        anio, mes = anio - 1, 12
+    salida = []
+    for _ in range(2):
+        salida.append((mes, anio % 100))
+        mes -= 3
+        if mes == 0:
+            anio, mes = anio - 1, 12
+    return salida
+
+
 def urls_candidatas(url):
-    """Resuelve {anio} en la URL. Devuelve los candidatos, en orden.
+    """Resuelve {anio} o {trim} en la URL. Devuelve los candidatos, en orden.
 
     POR QUE
-        Varios cuadros del INDEC llevan el año en el nombre: sh_isac_2026.xls,
-        sh_ipi_manufacturero_2026.xls. Son estables doce meses y despues rotan.
-        Dejar el año escrito a mano significaria que el 1 de enero el modulo
-        empieza a devolver 404 hasta que alguien se acuerde de editarlo. Eso es
+        Varios cuadros del INDEC llevan una fecha en el nombre:
+          {anio} → sh_isac_2026.xls           (fija doce meses, rota en enero)
+          {trim} → sh_oferta_demanda_06_26.xls (mes de publicacion trimestral)
+        Dejar esas fechas escritas a mano significaria que el modulo empieza a
+        devolver 404 hasta que alguien se acuerde de editarlo. Eso es
         mantenimiento manual, y en este proyecto lo que no es automatico no va.
 
-        Se prueba el año corriente y, si no esta, el anterior. En enero eso
-        cubre la ventana real: el informe de diciembre puede seguir apuntando
-        al archivo del año viejo durante algunas semanas.
+        En los dos casos se prueba el periodo corriente y, si no esta, el
+        anterior. Eso cubre la ventana real entre que el periodo arranca y que
+        el INDEC efectivamente publica.
+
+    Lo que NO se puede resolver asi son las URLs con el DIA de publicacion
+    adentro (ica_cuadros_20_07_26.xls): esas hay que ir a buscarlas.
     """
+    if "{trim}" in url:
+        return [url.replace("{trim}", f"{mm:02d}_{aa:02d}")
+                for mm, aa in _trimestres_publicacion()]
     if "{anio}" not in url:
         return [url]
     anio = datetime.now(timezone.utc).year
