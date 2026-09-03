@@ -218,10 +218,18 @@ def _prev(bucket):
 # calendario de feriados: los feriados dan el mismo número que la rueda anterior.
 
 HORA_AR = -3                              # Argentina = UTC-3 (Actions corre en UTC)
+TZ_AR = dt.timezone(dt.timedelta(hours=HORA_AR))   # zona real (Argentina no tiene DST)
 MERCADO_DESDE, MERCADO_HASTA = 10, 18     # horario aproximado de operatoria
 
 def _ahora_ar():
-    return dt.datetime.now(dt.timezone.utc) + dt.timedelta(hours=HORA_AR)
+    """Ahora en hora argentina, CON zona (offset -03:00).
+
+    Antes corría la hora a mano dejando tzinfo=UTC: los valores de reloj eran
+    correctos pero el objeto mentía sobre su zona, así que cualquiera que lo
+    serializara con isoformat() escribía '+00:00' sobre una hora argentina.
+    Los usos existentes (.date(), .hour, .weekday(), strftime) no cambian:
+    el reloj de pared es idéntico."""
+    return dt.datetime.now(TZ_AR)
 
 def _es_finde(f):
     try:
@@ -1048,7 +1056,11 @@ def calendario(meses=2, cap=14):
 def _breaking(bid, text, source, prioridad, metric=None, valor=None,
               esperado=None, valencia="neutro", label="Breaking news"):
     it = {"id": bid, "label": label, "text": text, "source": source,
-          "published_at": dt.datetime.now().isoformat(timespec="seconds"),
+          # CON zona: un ISO sin offset el navegador lo lee como hora LOCAL,
+          # y el runner corre en UTC. Ese era el bug de las dos horas distintas
+          # para el mismo hecho. Misma forma que el campo "actualizado", que la
+          # app ya renderiza bien.
+          "published_at": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),
           "valencia": valencia, "_prioridad": prioridad}
     if metric is not None:   it["metric"]   = metric
     if valor is not None:    it["valor"]    = valor
@@ -1056,13 +1068,24 @@ def _breaking(bid, text, source, prioridad, metric=None, valor=None,
     return it
 
 def _vigente(item):
-    """True hasta las 23:59:59 del día de publicación (igual que la app)."""
+    """True hasta las 23:59:59 HORA ARGENTINA del día de publicación.
+
+    Antes comparaba naive contra naive y, como el runner corre en UTC, el corte
+    caía a las 23:59:59 UTC = 21:00 ARG: el breaking se apagaba tres horas antes
+    de medianoche. Ahora el día se cierra en hora argentina.
+
+    Acepta published_at CON zona (formato nuevo) y SIN zona (formato viejo, que
+    se escribía en UTC sin declararlo). Sin esa tolerancia, la primera corrida
+    después del deploy reventaría al comparar un aware contra un naive."""
     try:
         pub = dt.datetime.fromisoformat(item["published_at"])
     except Exception:
         return False
-    fin = pub.replace(hour=23, minute=59, second=59, microsecond=0)
-    return dt.datetime.now() <= fin
+    if pub.tzinfo is None:                    # legado: venía en UTC sin declarar
+        pub = pub.replace(tzinfo=dt.timezone.utc)
+    fin = pub.astimezone(TZ_AR).replace(hour=23, minute=59, second=59,
+                                        microsecond=0)
+    return dt.datetime.now(dt.timezone.utc) <= fin
 
 def _cruce_nivel(prev, cur, paso):
     """Si 'cur' cruzó hacia arriba un múltiplo de 'paso' respecto de 'prev',
