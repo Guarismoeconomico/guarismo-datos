@@ -57,9 +57,18 @@ FORMATO
     El hash POR SERIE es lo que despues permite responder "esta serie cambio
     respecto de ayer" sin descomprimir el archivo entero.
 
+PAGINACION — EL FIX DEL 3-sep-2026
+    El BCRA devuelve metadata.resultset.count distinto entre paginas y entre
+    endpoints: no sirve como total. Cortar por aritmetica de count andaba de
+    casualidad y podia truncar EN SILENCIO. Se corta por PAGINA CORTA (una
+    pagina con menos elementos que el limit es la ultima) y si se agotan las
+    paginas sin ver una corta, se lanza. El count se registra, no decide.
+
 HUECOS, NO MENTIRAS
     Si una serie falla, se escribe igual con {"error": ...} y n=0. Queda el
     hueco registrado con su fecha. Si fallan TODAS, termina en rojo sin subir.
+    Un truncamiento silencioso no seria un hueco: seria un archivo incompleto
+    que parece completo. Por eso el corte de paginacion falla ruidoso.
 
 DETERMINISMO
     gzip mtime=0 + json sort_keys=True: mismo contenido, mismo sha256. Misma
@@ -207,22 +216,51 @@ def _resultset(j):
     return ((j or {}).get("metadata") or {}).get("resultset") or {}
 
 
+def _pagina_llena(rs):
+    """Cuantos elementos tiene una pagina LLENA en esta respuesta.
+
+    Es el menor entre el limit que pedimos y el limit que la API dice haber
+    aplicado. Cubre las dos direcciones: si el BCRA recorta el limit (devuelve
+    500 cuando pedimos 1000) no cortamos de mas; si declara un limit mayor que
+    el pedido, tampoco.
+    """
+    declarado = int(rs.get("limit") or 0) or PAGINA
+    return max(1, min(declarado, PAGINA))
+
+
 def bajar_catalogo():
-    """Catalogo COMPLETO, paginando por offset. Devuelve lista de variables."""
-    filas, offset, vistos = [], 0, 0
-    for _ in range(TOPE_PAGINAS):
+    """Catalogo COMPLETO, paginando por offset. Devuelve (filas, declarado_1a).
+
+    CORTE POR PAGINA CORTA — fix del 3-sep-2026
+        El BCRA devuelve metadata.resultset.count DISTINTO entre paginas: en la
+        primera trae el total (1.610) y en la ultima trae el resto (610). Cortar
+        por aritmetica de count funcionaba de casualidad y era una bomba de
+        tiempo: el dia que la primera pagina declare el largo del lote en vez
+        del total, el bucle corta en la pagina 1 y archiva 1.000 de 1.610 EN
+        SILENCIO, sin hueco y sin error. Un snapshot truncado que parece
+        completo es el peor modo de falla de un archivo notarial.
+
+        Ahora el count NO decide nada: es solo una señal que se registra. El
+        corte lo da la propia respuesta — una pagina mas corta que el limit es
+        la ultima. Y si se agotan las paginas sin ver una corta, se LANZA:
+        mejor un hueco registrado que un archivo truncado que parece entero.
+    """
+    filas, offset, declarado_1a = [], 0, None
+    for pagina in range(TOPE_PAGINAS):
         j = _pedir(BASE, {"limit": PAGINA, "offset": offset})
         lote = j.get("results") or []
-        filas.extend(lote)
         rs = _resultset(j)
-        total = int(rs.get("count") or 0)
-        paso = int(rs.get("limit") or PAGINA) or PAGINA
-        vistos = total
-        offset += paso
-        if not lote or offset >= total:
-            break
+        if pagina == 0:
+            declarado_1a = int(rs.get("count") or 0) or None
+        filas.extend(lote)
+        if len(lote) < _pagina_llena(rs):
+            return filas, declarado_1a
+        offset += len(lote)
         time.sleep(PAUSA)
-    return filas, vistos
+    raise RuntimeError(
+        f"catalogo: se agotaron las {TOPE_PAGINAS} paginas sin llegar a una "
+        f"pagina corta ({len(filas)} filas bajadas). Posible truncamiento: no "
+        f"se archiva como completo.")
 
 
 def bajar_serie(idv):
@@ -232,6 +270,10 @@ def bajar_serie(idv):
     orden descendente por fecha. Verificado sobre la respuesta real el
     2-sep-2026. Se ordena ascendente antes de guardar para que el hash no
     dependa del orden en que la API decida devolver.
+
+    Corta por PAGINA CORTA, igual que el catalogo y por el mismo motivo: el
+    count del BCRA no es confiable como total. Si se agotan las paginas sin
+    pagina corta, lanza — y capturar() lo registra como HUECO de esa serie.
     """
     puntos, offset = [], 0
     for _ in range(TOPE_PAGINAS):
@@ -239,15 +281,14 @@ def bajar_serie(idv):
         res = j.get("results") or []
         lote = (res[0].get("detalle") or []) if res else []
         puntos.extend(lote)
-        rs = _resultset(j)
-        total = int(rs.get("count") or 0)
-        paso = int(rs.get("limit") or PAGINA) or PAGINA
-        offset += paso
-        if not lote or offset >= total:
-            break
+        if len(lote) < _pagina_llena(_resultset(j)):
+            puntos.sort(key=lambda p: str(p.get("fecha") or ""))
+            return puntos
+        offset += len(lote)
         time.sleep(PAUSA)
-    puntos.sort(key=lambda p: str(p.get("fecha") or ""))
-    return puntos
+    raise RuntimeError(
+        f"serie {idv}: se agotaron las {TOPE_PAGINAS} paginas sin llegar a una "
+        f"pagina corta ({len(puntos)} puntos bajados). Posible truncamiento.")
 
 
 def capturar():
@@ -256,11 +297,17 @@ def capturar():
 
     # ---- 1. Catalogo -----------------------------------------------------
     print(f"[bcra] catalogo completo (cabeza de TODAS las series)")
-    catalogo, cat_ok = [], 0
+    catalogo, cat_ok, cat_declarado = [], 0, None
     try:
-        catalogo, declarado = bajar_catalogo()
+        catalogo, cat_declarado = bajar_catalogo()
         cat_ok = len(catalogo)
-        print(f"[bcra] catalogo: {cat_ok} variables (la API declara {declarado})")
+        # El count se LOGUEA, no decide. Y es el de la PRIMERA pagina: el de la
+        # ultima era el resto (610) y por eso el log viejo mentia.
+        print(f"[bcra] catalogo: {cat_ok} variables "
+              f"(la API declaro {cat_declarado} en la 1a pagina)")
+        if cat_declarado and cat_declarado != cat_ok:
+            print(f"   [bcra] AVISO — declarado {cat_declarado} ≠ bajado {cat_ok}. "
+                  f"El count del BCRA no es confiable; manda lo bajado.")
         for v in catalogo:
             lineas.append({"tipo": "catalogo", "capturado_utc": ahora, **v})
     except Exception as e:
@@ -320,10 +367,11 @@ def capturar():
         lineas.append(fila)
         time.sleep(PAUSA)
 
-    return lineas, cat_ok, series_ok, huecos, total_puntos
+    return lineas, cat_ok, series_ok, huecos, total_puntos, cat_declarado
 
 
-def empaquetar(lineas, cat_ok, series_ok, huecos, total_puntos, tls):
+def empaquetar(lineas, cat_ok, series_ok, huecos, total_puntos, tls,
+               cat_declarado=None):
     """Arma el NDJSON gzipeado. Devuelve (bytes, sha256, manifiesto)."""
     ahora = datetime.now(timezone.utc)
     manifiesto = {
@@ -333,6 +381,9 @@ def empaquetar(lineas, cat_ok, series_ok, huecos, total_puntos, tls):
         "capturado_utc": ahora.isoformat(timespec="seconds"),
         "tls": tls,
         "catalogo_variables": cat_ok,
+        # Lo que la fuente DIJO que habia, en la primera pagina, contra lo que
+        # efectivamente entregó. Medir a la fuente, no a la economia.
+        "catalogo_declarado_1a_pagina": cat_declarado,
         "series_pedidas": len(PRINCIPALES),
         "series_ok": series_ok,
         "huecos": huecos,
@@ -412,14 +463,14 @@ def main():
     else:
         print(f"[bcra] TLS: no se pudo leer el certificado — {tls.get('error')}")
 
-    lineas, cat_ok, series_ok, huecos, total_puntos = capturar()
+    lineas, cat_ok, series_ok, huecos, total_puntos, cat_declarado = capturar()
 
     if cat_ok == 0 and series_ok == 0:
         print("✗ Fallo el catalogo Y todas las series. No hay nada que archivar.")
         return 1
 
     datos, sha, manifiesto = empaquetar(lineas, cat_ok, series_ok,
-                                        huecos, total_puntos, tls)
+                                        huecos, total_puntos, tls, cat_declarado)
     print(f"[bcra] catalogo {cat_ok} vars · series {series_ok}/{len(PRINCIPALES)} · "
           f"{huecos} huecos · {total_puntos} puntos · {len(datos)/1024:.0f} KB gz")
 
