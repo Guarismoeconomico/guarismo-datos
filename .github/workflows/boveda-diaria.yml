@@ -17,9 +17,16 @@ name: Guarismo boveda diaria
 # Los modulos devuelven 0 con huecos (un hueco registrado es la conducta
 # correcta, no una falla), 1 si fallaron TODAS las fuentes, 3 si fallo R2.
 #
-# EL RELOJ ES cron-job.org disparando workflow_dispatch. El bloque schedule
-# queda solo como red pasiva: el cron nativo de GitHub descarta corridas en
-# silencio.
+# EL RELOJ ES cron-job.org disparando workflow_dispatch, y es el UNICO.
+#
+# El bloque `schedule` estuvo un tiempo como red pasiva y se saco el 4-sep-2026,
+# con la prueba en la mano: el 3-sep GitHub disparo la corrida programada para
+# las 22:15 UTC a las 00:04 UTC del dia siguiente — UNA HORA Y CUARENTAINUEVE
+# MINUTOS TARDE — y produjo una segunda captura completa del dia (run #15,
+# "Scheduled"), duplicando ~1 MB diarios de BCRA contra el limite de 10 GB de
+# R2. Una red que se dispara a una hora impredecible no es una red: es ruido
+# con costo. Si el reloj externo falla, la conducta correcta es un HUECO
+# REGISTRADO, no una captura a deshora.
 #
 # OJO AL MIRAR ACTIONS: las corridas disparadas por cron-job.org aparecen como
 # "Manually run by Guarismoeconomico", porque el PAT es de esa cuenta. La UI de
@@ -29,8 +36,6 @@ name: Guarismo boveda diaria
 
 on:
   workflow_dispatch: {}
-  schedule:
-    - cron: "15 22 * * *"     # 19:15 ARG, best effort, NO se cuenta con esto
 
 jobs:
   boveda:
