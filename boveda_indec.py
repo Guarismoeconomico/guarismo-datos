@@ -15,15 +15,23 @@ POR QUE EXISTE
 
     Lo que no se captura el dia que estaba, no se recupera nunca.
 
-TRES PATRONES DE URL, NO UNO — verificado el 3-sep-2026
+CUATRO PATRONES DE URL — verificado el 3 y el 4-sep-2026
     (a) Fija de verdad: sh_emae_mensual_base2004.xls. El caso ideal.
     (b) Con el año adentro: sh_isac_2026.xls. Fija doce meses y despues rota.
         Se escribe {anio} y lo resuelve urls_candidatas() — automatico, para
         que nadie tenga que editar el diccionario cada enero.
-    (c) Con la FECHA DE PUBLICACION adentro: ica_cuadros_20_07_26.xls, donde el
-        20 es el dia en que salio el informe y cambia mes a mes. Esa URL no se
-        puede construir. El ICA, el IPC mensual y los cuadros de supermercados
-        caen aca y NO entran a este modulo: son mecanica D, scraping.
+    (c) Con el MES DE PUBLICACION trimestral: sh_oferta_demanda_06_26.xls.
+        Se escribe {trim} y lo resuelve _trimestres_publicacion().
+    (d) Con el DIA DE PUBLICACION adentro: ica_cuadros_20_08_26.xls, donde el
+        20 es el dia en que salio el informe y cambia mes a mes.
+
+    El patron (d) parecia imposible de cablear y por eso el ICA estaba anotado
+    como mecanica D (scraping). No hace falta: se prueban los dias de la
+    ventana de publicacion y el que no existe devuelve la pagina de error del
+    INDEC, que _es_html() ya trata igual que un 404. Es el mismo truco que (c),
+    con otra unidad de tiempo. Lo que SIGUE siendo mecanica D es lo que no
+    tiene nombre predecible: el cuadro vivo del art. 15 del ICC, detras de
+    bajarCuadroEstadistico.asp?idc=<hash>.
 
 QUE HACE
     Baja cada archivo, lo hashea, y lo sube a R2 SOLO SI CAMBIO respecto de la
@@ -87,19 +95,30 @@ ESTADO = "_estado/indec_hashes.json"
 
 UA = {"User-Agent": "Guarismo/1.0 (+https://guarismo.com.ar; infoguarismo@gmail.com)"}
 
+# Ventana de publicacion para el patron (d), el que lleva el DIA adentro.
+# Verificado sobre 17 ediciones del ICA leyendole el pie a los propios
+# informes: el dia observado va del 17 al 22, y ONCE de las diecisiete
+# cayeron un 20. Se prueba primero el 20 y despues se baja de a uno, con
+# margen de cinco dias para abajo y dos para arriba.
+DIA_TIPICO = 20
+DIA_DESDE = 12
+DIA_HASTA = 24
+
 # URLs verificadas sobre informes de prensa oficiales. El hash aleatorio del
 # INDEC afecta a los PDF de prensa (uploads/informesdeprensa/), NO a estos
-# cuadros. Pero hay DOS patrones distintos y conviene no confundirlos:
+# cuadros. Pero hay CUATRO patrones distintos y conviene no confundirlos:
 #
 #   (a) URL fija de verdad, sin fecha en el nombre. Se sobrescribe en cada
 #       publicacion conservando el nombre. Es el caso ideal.
 #   (b) URL con el AÑO adentro (sh_isac_2026.xls). Fija durante doce meses y
 #       despues rota. Se escribe {anio} y lo resuelve urls_candidatas().
+#   (c) URL con el MES de publicacion trimestral (sh_oferta_demanda_06_26.xls).
+#       Se escribe {trim}.
+#   (d) URL con el DIA de publicacion (ica_cuadros_20_08_26.xls). Se escribe
+#       {dia} y lo resuelve _dias_publicacion() probando la ventana.
 #
-# Hay un tercer patron que NO entra aca: los cuadros del ICA llevan el DIA DE
-# PUBLICACION en el nombre (ica_cuadros_20_07_26.xls, y el 20 cambia mes a mes
-# porque el ICA sale entre el 18 y el 22). Esa URL no se puede construir: hay
-# que ir a buscarla. Es mecanica D — scraping de listado — y no este modulo.
+# Lo que NO entra aca sigue siendo lo que no tiene nombre predecible: el cuadro
+# vivo del art. 15 del ICC, detras de bajarCuadroEstadistico.asp?idc=<hash>.
 #
 # NOTA SOBRE EL IPC: se captura y se hashea. ARCHIVAR NO ES PUBLICAR. Nada de
 # esto sale a ninguna pantalla como afirmacion propia de Guarismo. Misma regla
@@ -199,6 +218,48 @@ ARCHIVOS = {
         "ext": "pdf",
         "desc": "Metodologia de indices de precios y cantidades del comercio exterior. "
                 "URL citada en informes del ICA — confirmar en el primer manifiesto.",
+    },
+    "comex_metodologia": {
+        "url": "https://www.indec.gob.ar/ftp/cuadros/economia/metodologia_comex.pdf",
+        "ext": "pdf",
+        "desc": "Metodologia del intercambio comercial argentino. URL fija citada por "
+                "el propio INDEC como el enlace metodologico del comercio exterior. "
+                "Patron (a).",
+    },
+
+    # --- Tier 1: ICA, el patron (d) --------------------------------------
+    # El ICA es mensual y sale entre el 17 y el 22. Su URL lleva la FECHA DE
+    # PUBLICACION adentro; la resuelve _dias_publicacion() probando la ventana
+    # del mes corriente y, si todavia no salio, la del mes anterior. Esa caida
+    # es la misma que hace _trimestres_publicacion() con el PIB, y por el mismo
+    # motivo: sin ella quedaria un hueco inventado dos semanas por mes.
+    #
+    # POR QUE SE BAJA TODOS LOS DIAS Y NO UNA VEZ POR MES: el informe de mayo
+    # 2026 se difundio el 18/06/2026 y el propio PDF declara "Fecha de
+    # actualizacion: 24/6/2026" — seis dias despues. Si el INDEC retoca el
+    # cuadro conservando el nombre, la captura diaria lo ve como NUEVO. Ese par
+    # antes/despues es exactamente el producto.
+    #
+    # LA FUENTE DECLARA SU PROVISORIEDAD CON NUMERO, cada mes: en la edicion de
+    # mayo 2026, el 12,7% de la documentacion aduanera oficializada del mes
+    # seguia pendiente al cierre del informe, y los exportadores pueden
+    # corregir valores entre 60 y 180 dias despues del embarque. Ese porcentaje
+    # cambia edicion a edicion: es serie propia sin interpretar nada.
+    "ica_cuadros": {
+        "url": "https://www.indec.gob.ar/ftp/cuadros/economia/ica_cuadros_{dia}.xls",
+        "ext": "xls",
+        "desc": "ICA. Cuadros del informe tecnico y complementarios del intercambio "
+                "comercial argentino de bienes (40 cuadros). Patron (d): el dia de "
+                "publicacion va adentro del nombre.",
+    },
+    "ica_anexo_cuadros": {
+        "url": "https://www.indec.gob.ar/ftp/cuadros/economia/ica_anexo_cuadros_{dia}.xls",
+        "ext": "xls",
+        "desc": "ICA. Anexo con el detalle de las series que componen el informe. "
+                "Verificado en las ediciones de feb, abr, jun y jul de 2026, y en "
+                "2024 y 2025. OJO: el informe de mayo 2026 apunta dos veces al "
+                "ica_cuadros y no nombra el anexo — si ese mes no existe, queda un "
+                "hueco fechado, que es el registro correcto.",
     },
 
     # --- Tier 2: redeterminacion de obra publica (el comprador #2) --------
@@ -401,27 +462,72 @@ def _trimestres_publicacion(hoy=None):
     return salida
 
 
+def _dias_publicacion(hoy=None):
+    """Los dias candidatos de publicacion, como (dd, mm, aa), en orden.
+
+    El ICA sale una vez por mes, entre el 17 y el 22, y su nombre de archivo
+    lleva ese dia adentro. No hay forma de saber cual es sin preguntar: se
+    prueban todos los de la ventana y el que no existe devuelve la pagina de
+    error del INDEC, que bajar() ya trata igual que un 404.
+
+    ORDEN, y no es capricho: primero el 20, porque once de las diecisiete
+    ediciones verificadas cayeron ese dia. Con eso, veintiseis dias de cada
+    treintaiuno se resuelven en UN solo pedido. Despues se baja de a uno desde
+    el tope. Medido sobre un mes completo: 2,2 pedidos por dia en promedio,
+    peor dia 9 (la vispera de la publicacion, cuando el mes corriente todavia
+    no tiene nada y hay que caer al anterior).
+
+    TOPE DEL MES CORRIENTE = el dia de hoy. Un archivo fechado el 22 no puede
+    existir el 20: pedirlo seria gastar un pedido en algo imposible.
+
+    EL MES ANTERIOR SIEMPRE VA, y es la pieza que evita el hueco inventado.
+    Del 1 al 16 el archivo del mes todavia no existe y el vigente es el del mes
+    pasado: sin ese segundo bloque el modulo registraria un hueco todos los
+    dias durante media vida. Es la misma decision, por el mismo motivo, que
+    _trimestres_publicacion() toma para el PIB.
+    """
+    hoy = hoy or datetime.now(timezone.utc)
+
+    def bloque(anio, mes, tope):
+        dias = []
+        if DIA_DESDE <= DIA_TIPICO <= tope:
+            dias.append(DIA_TIPICO)
+        dias += [d for d in range(tope, DIA_DESDE - 1, -1) if d != DIA_TIPICO]
+        return [(d, mes, anio % 100) for d in dias]
+
+    salida = []
+    if hoy.day >= DIA_DESDE:
+        salida += bloque(hoy.year, hoy.month, min(DIA_HASTA, hoy.day))
+    pa, pm = (hoy.year - 1, 12) if hoy.month == 1 else (hoy.year, hoy.month - 1)
+    salida += bloque(pa, pm, DIA_HASTA)
+    return salida
+
+
 def urls_candidatas(url):
-    """Resuelve {anio} o {trim} en la URL. Devuelve los candidatos, en orden.
+    """Resuelve {anio}, {trim} o {dia} en la URL. Los candidatos, en orden.
 
     POR QUE
         Varios cuadros del INDEC llevan una fecha en el nombre:
-          {anio} → sh_isac_2026.xls           (fija doce meses, rota en enero)
+          {anio} → sh_isac_2026.xls            (fija doce meses, rota en enero)
           {trim} → sh_oferta_demanda_06_26.xls (mes de publicacion trimestral)
+          {dia}  → ica_cuadros_20_08_26.xls    (dia de publicacion mensual)
         Dejar esas fechas escritas a mano significaria que el modulo empieza a
         devolver 404 hasta que alguien se acuerde de editarlo. Eso es
         mantenimiento manual, y en este proyecto lo que no es automatico no va.
 
-        En los dos casos se prueba el periodo corriente y, si no esta, el
+        En los tres casos se prueba el periodo corriente y, si no esta, el
         anterior. Eso cubre la ventana real entre que el periodo arranca y que
         el INDEC efectivamente publica.
 
-    Lo que NO se puede resolver asi son las URLs con el DIA de publicacion
-    adentro (ica_cuadros_20_07_26.xls): esas hay que ir a buscarlas.
+    Lo unico que NO se resuelve asi es lo que no tiene nombre predecible: el
+    cuadro vivo del art. 15 del ICC vive detras de un link dinamico con hash.
     """
     if "{trim}" in url:
         return [url.replace("{trim}", f"{mm:02d}_{aa:02d}")
                 for mm, aa in _trimestres_publicacion()]
+    if "{dia}" in url:
+        return [url.replace("{dia}", f"{dd:02d}_{mm:02d}_{aa:02d}")
+                for dd, mm, aa in _dias_publicacion()]
     if "{anio}" not in url:
         return [url]
     anio = datetime.now(timezone.utc).year
