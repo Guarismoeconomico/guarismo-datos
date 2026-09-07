@@ -1,0 +1,87 @@
+name: Guarismo boveda mecanica D (manual)
+
+# Workflow MANUAL de la mecanica D (paginas fijas con listado: Hacienda y
+# Finanzas). NO tiene reloj y no lo va a tener nunca.
+#
+# POR QUE EXISTE APARTE DE boveda-diaria.yml
+#   (1) Para estrenar el modulo sin apostar el verde de la boveda diaria, que
+#       hoy corre con tres modulos y cero huecos. Un modulo nuevo se prueba
+#       solo; recien cuando esta probado se suma como cuarto paso al workflow
+#       diario, que es un bloque copiado.
+#   (2) Porque el BACKFILL necesita existir para siempre y necesita ser
+#       MANUAL. Son ~200 archivos de casi una decada, incluidos ZIP del SIGADE
+#       de tamaño desconocido, contra un bucket que se vigila. Eso no se
+#       dispara solo ni una vez ni por accidente.
+#
+# ORDEN DE USO — de menos a mas irreversible
+#   1. modo=seco      → baja, hashea e informa. NO escribe un byte en R2.
+#                       Se lee el log y se confirma que dice lo esperado.
+#   2. modo=normal    → captura las 2 ediciones mas nuevas por familia.
+#                       Deberian ser 12 objetos: 2 paginas + 10 archivos.
+#   3. (recien ahi)   → agregar el paso a boveda-diaria.yml.
+#   4. modo=backfill  → una sola vez, mirando el panel de R2.
+#
+# QUE MIRAR EN EL LOG
+#   · "N links · M sin resolver · K a capturar"
+#   · Las etiquetas sin resolver. Hoy son TRES y estan explicadas: el "Abil"
+#     de 2023 (typo de la fuente) y los dos "Descargar anual" del IMIG, que
+#     son agregados anuales y no un mes. Si aparece una CUARTA, la fuente
+#     cambio el texto de un link y hay que mirarlo antes de que se pierda una
+#     edicion.
+#   · El mod= de cada pagina es el article:modified_time que el CMS escribe
+#     solo. Es la serie de puntualidad, y cambia el dia que el organismo
+#     publica algo nuevo.
+
+on:
+  workflow_dispatch:
+    inputs:
+      modo:
+        description: "seco = no escribe nada · normal = 2 ediciones · backfill = TODO el historico"
+        required: true
+        default: seco
+        type: choice
+        options:
+          - seco
+          - normal
+          - backfill
+      fuente:
+        description: "Limitar a una fuente (vacio = las dos)"
+        required: false
+        default: ""
+        type: choice
+        options:
+          - ""
+          - hacienda_fiscal
+          - finanzas_deuda_trim
+
+jobs:
+  mecanicad:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - run: pip install requests boto3
+
+      - name: Capturar mecanica D a R2
+        env:
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET: guarismo-crudo
+          MODO: ${{ inputs.modo }}
+          FUENTE: ${{ inputs.fuente }}
+        run: |
+          ARGS=""
+          case "$MODO" in
+            seco)     ARGS="--seco" ;;
+            backfill) ARGS="--backfill" ;;
+            normal)   ARGS="" ;;
+            *) echo "modo desconocido: $MODO"; exit 2 ;;
+          esac
+          if [ -n "$FUENTE" ]; then ARGS="$ARGS --fuente=$FUENTE"; fi
+          echo "modo=$MODO fuente=${FUENTE:-todas} args='$ARGS'"
+          python boveda_mecanicad.py $ARGS
