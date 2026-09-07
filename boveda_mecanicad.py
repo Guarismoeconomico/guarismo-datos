@@ -234,6 +234,32 @@ FUENTES = {
         "etiquetador": "titulos_estructura",
         "organismo": "Secretaria de Finanzas",
     },
+    # --- Datos Anteriores de la deuda trimestral. Reconocida el 7-sep-2026,
+    # --- cableada el 7-sep-2026. 102 archivos, 2007-2018.
+    #
+    # CADENCIA "archivo", Y ES LA PRIMERA DEL MODULO.
+    #   Esta pagina no publica: guarda. Lo ultimo que subio es de 2018 y lo
+    #   vigente vive en la pagina madre. Correr seleccionar() aca da NUEVE
+    #   archivos por dia PARA SIEMPRE — medido, no estimado: dos de 2018 por
+    #   cada uno de los tres productos vivos, mas DOS INFORMES DE 2015 y el
+    #   avance preliminar de 2016, que entran por ser lo mas nuevo de
+    #   productos discontinuados. Nueve objetos que no pueden cambiar nunca.
+    #
+    #   Con cadencia "archivo" la pagina se mira igual todos los dias — su
+    #   article:modified_time es la alarma, y es la unica que importa: se
+    #   movio el 26-ago-2026 y nadie sabe que cambio, porque no estaba bajo
+    #   captura. Los archivos van solo con --backfill.
+    #
+    #   OJO: esto NO arregla el congelado de 42,7 MB de titulos_estructura.
+    #   Ese es un ITEM adentro de una pagina viva, no una pagina archivo.
+    #   Sigue pendiente y sigue necesitando su propia medicion.
+    "finanzas_deuda_trim_ant": {
+        "url": "https://www.argentina.gob.ar/economia/finanzas/datos-trimestrales-de-la-deuda/datos-anteriores",
+        "desc": "Secretaria de Finanzas — deuda publica trimestral, ediciones anteriores (2007-2018)",
+        "etiquetador": "deuda_ant",
+        "organismo": "Secretaria de Finanzas",
+        "cadencia": "archivo",
+    },
     "finanzas_deuda_mens_calendario": {
         # La pagina madre. Existe por UNA sola cosa: cuelga de aca el
         # calendario_de_publicaciones_{anio}.pdf. Se entra por la pagina y no
@@ -379,6 +405,36 @@ def _absoluta(href, base):
     if href.startswith("/"):
         return "https://www.argentina.gob.ar" + href
     return None
+
+
+HOST = re.compile(r"^https?://([^/]+)", re.I)
+
+
+def _a_https_mismo_host(url, base):
+    """HTTP plano -> HTTPS cuando el host es EL MISMO que el de la pagina.
+
+    LA DECISION FIRME: la boveda nunca sella por un canal no autenticado.
+    Y _absoluta() NO alcanzaba: devuelve el http:// tal cual, sin mirarlo.
+    Verificado leyendo el codigo el 7-sep-2026, no recordado.
+
+    EL CASO REAL, uno entre 102 en Datos Anteriores:
+        http://www.argentina.gob.ar/sites/default/files/
+        presentacion_grafica_de_la_deuda_31-12-2016.pdf
+    Los otros 101 son https al mismo host y al mismo directorio.
+
+    Se sube el esquema y QUEDA ESCRITO en el manifiesto. Arreglarlo en
+    silencio seria borrar un hecho de la fuente, que es el producto.
+
+    Si el host fuera OTRO no se toca: eso no es una errata de tipeo, es un
+    link a un tercero, y subirle el esquema seria inventar una URL. En ese
+    caso queda como esta y, si no baja, es un hueco fechado con su motivo.
+    """
+    if not (url or "").lower().startswith("http://"):
+        return url, False
+    mu, mb = HOST.match(url), HOST.match(base or "")
+    if not mu or not mb or mu.group(1).lower() != mb.group(1).lower():
+        return url, False
+    return "https://" + url[len("http://"):], True
 
 
 # ---------------------------------------------------------------------------
@@ -708,6 +764,171 @@ def etiquetar_titulos_estructura(pagina, base):
     return salida
 
 
+FECHA_CELDA = re.compile(r"^\s*(\d{2})-(\d{2})-((?:19|20)\d{2})\s*$")
+
+# Cierre de trimestre -> numero de trimestre. Un mes que no sea 3/6/9/12 no es
+# un cierre y no se adivina: queda incierto.
+CIERRE_TRIM = {3: 1, 6: 2, 9: 3, 12: 4}
+
+# "IV Trimestre" / "I Semestre" dentro del texto del producto.
+UNIDAD = re.compile(r"\b(IV|III|II|I)\b\s*(trimestre|semestre)", re.I)
+
+
+def _producto_deuda_ant(txt):
+    """El producto CANONICO, no el texto crudo. Devuelve (producto, canonico?).
+
+    LO ENCONTRO EL TEST, NO LA LECTURA — y es el mismo modo de falla que el
+    slug de los coeficientes PG, dado vuelta.
+        La celda dice "Datos Deuda Publica IV Trimestre 2018". Si eso se usa
+        como producto, el PERIODO viaja adentro del nombre del producto y cada
+        fila se vuelve su propio grupo: seleccionar() devolvia 89 de 102 en vez
+        de 9, y la ventana dejaba de agrupar nada.
+
+    El periodo ya vive en su campo. El producto tiene que ser lo que se repite
+    a lo largo de los años, o la serie no se puede seguir.
+
+    Es una lista corta escrita a mano, como ALIAS_MES, no una heuristica.
+    Clasifica las 102 filas reales del 7-sep-2026, con cero sin reconocer.
+
+    Y de yapa CORRIGE UNA DERIVA DE LA FUENTE: entre 2007 y 2018 el mismo
+    producto se escribio "Base de Datos de Deuda Publica" y "Base de dato de
+    Deuda Publica". Sin canonizar serian dos series distintas para el mismo
+    objeto. El texto crudo de la fuente se conserva entero en `etiqueta`.
+    """
+    e = (txt or "").strip().lower()
+    if "avance preliminar" in e:    return "avance preliminar", True
+    if e.startswith("presentaci"):  return "presentacion grafica", True
+    if e.startswith("base de dat"): return "base de datos", True
+    if e.startswith("informe de"):  return "informe", True
+    if e.startswith("datos deuda"): return "datos", True
+    # Producto nuevo o reescrito: NO se fuerza a ninguno de los cinco. Se pasa
+    # el texto tal cual y se marca, que es lo mismo que hace el modulo con una
+    # etiqueta de periodo que no resuelve.
+    return (txt or "").strip() or "archivo", False
+
+
+def etiquetar_deuda_ant(pagina, base):
+    """Datos Anteriores (2007-2018): la FECHA en la primera celda, el PRODUCTO
+    en la segunda. AL REVES que la trimestral vigente.
+
+    POR QUE NO SIRVE etiquetar_finanzas()
+        En la pagina vigente el año vive en un <h5>, la primera celda es el
+        trimestre y el PRODUCTO es el texto del link. Aca el texto del link es
+        "Descargar" en las 102 filas: no dice nada.
+
+        Y hay 16 filas donde la etiqueta del producto NO declara periodo —
+        quince "Informe de Deuda Publica" a secas, identicas entre si, mas un
+        "Datos Deuda Publica" pelado. Con el etiquetador vigente esas 16
+        quedarian periodo_incierto y NUNCA entrarian a una corrida normal.
+        Contado sobre las 102 filas reales el 7-sep-2026.
+
+    DE DONDE SALE EL PERIODO
+        De la PRIMERA CELDA, que trae dd-mm-aaaa en las 102 de 102, y cuyo mes
+        es cierre de trimestre en las 102 de 102. Sigue valiendo la regla del
+        modulo: el periodo sale de la PAGINA, nunca del nombre del archivo.
+        La primera celda es texto de la pagina.
+
+    LAS DOS SEÑALES
+        Medido: la etiqueta declara periodo en 86 de 102, y en las 86 COINCIDE
+        con la celda. Cero contradicciones. Las seis que dicen "Semestre"
+        tampoco contradicen: "I Semestre 2015" cae el 30-06-2015, que es Q2.
+        La fuente no se equivoco — cambio la UNIDAD, y eso se guarda en
+        unidad_declarada en vez de tirarse.
+
+        La regla queda escrita para el futuro, aunque hoy no dispare: si la
+        etiqueta declara un periodo que NO es el de la celda, hay conflicto
+        entre dos señales independientes y el item queda INCIERTO. No se
+        archiva con el periodo de una de las dos: eso seria elegir a dedo.
+
+    EL LINK SUELTO
+        eventos() no emite cierres: no hay evento </tr> ni </table>. Un link
+        despues de la tabla se quedaria con la fecha y el producto de la
+        ultima fila — el bug que el test encontro en titulos_estructura.
+        Aca se CONSUME la fila al emitir: una fila vale por un link. Un link
+        con extension de archivo y sin fila detras sale como incierto, para
+        que lo vea un humano, no se descarta en silencio.
+    """
+    celdas, salida = [], []
+    for tipo, a, b in eventos(pagina):
+        if tipo == "fila":
+            celdas = []
+        elif tipo == "celda":
+            celdas.append(b or "")
+        elif tipo == "link":
+            ext = _ext_de(a)
+            if ext not in EXTENSIONES:
+                continue
+            url = _absoluta(a, base)
+            if not url:
+                continue
+            url, esquema = _a_https_mismo_host(url, base)
+
+            m = FECHA_CELDA.match(celdas[0]) if celdas else None
+            crudo = celdas[1].strip() if len(celdas) > 1 else ""
+            producto, canonico = _producto_deuda_ant(crudo)
+
+            if not m:
+                # Sin fecha en la primera celda no hay periodo posible. No se
+                # adivina y no se tira: queda para que lo mire un humano.
+                salida.append({
+                    "familia": "Deuda publica trimestral", "producto": producto,
+                    "etiqueta": crudo or None,
+                    "anio": None, "orden": None, "periodo": None,
+                    "periodo_incierto": True, "url": url, "ext": ext,
+                })
+                continue
+
+            dia, mes, anio = int(m.group(1)), int(m.group(2)), int(m.group(3))
+            tr = CIERRE_TRIM.get(mes)
+
+            it = {
+                "familia": "Deuda publica trimestral",
+                "producto": producto,
+                # La etiqueta es el texto CRUDO del producto tal como lo
+                # escribio la fuente. Es la evidencia: ahi se ve la deriva de
+                # "Base de Datos" a "Base de dato" y el "Semestre" de 2014-15.
+                # La celda de fecha va aparte, en fecha_en_la_celda.
+                "etiqueta": crudo or None,
+                "anio": anio,
+                "orden": tr,
+                "periodo": f"{anio}-Q{tr}" if tr else None,
+                "periodo_incierto": tr is None,
+                "url": url,
+                "ext": ext,
+                "fecha_en_la_celda": f"{anio:04d}-{mes:02d}-{dia:02d}",
+            }
+
+            if not canonico:
+                # No es un hueco: se captura igual. Pero queda dicho, porque un
+                # producto nuevo en una pagina congelada en 2018 es noticia.
+                it["producto_no_canonico"] = True
+
+            u = UNIDAD.search(crudo)
+            if u:
+                n = TRIMESTRES[u.group(1).lower()]
+                unidad = u.group(2).lower()
+                # I Semestre -> Q2, II Semestre -> Q4.
+                q = n if unidad == "trimestre" else n * 2
+                it["unidad_declarada"] = unidad
+                if tr is not None and q != tr:
+                    # Dos señales independientes en conflicto. No se elige.
+                    it["periodo"] = None
+                    it["orden"] = None
+                    it["periodo_incierto"] = True
+                    it["conflicto_celda_vs_etiqueta"] = (
+                        f"celda={anio}-Q{tr} · etiqueta={u.group(0)}")
+
+            if _roto(a):
+                it["href_roto_en_la_fuente"] = True
+            if esquema:
+                # La fuente lo publico en HTTP plano. Lo subimos nosotros.
+                # No es url_final: eso es una redireccion de la fuente.
+                it["esquema_corregido_por_guarismo"] = "http->https"
+            salida.append(it)
+            celdas = []          # la fila se consume: un link por fila
+    return salida
+
+
 ETIQUETADORES = {
     "hacienda": etiquetar_hacienda,
     "finanzas": etiquetar_finanzas,
@@ -715,6 +936,7 @@ ETIQUETADORES = {
     "deuda_mens_datos": etiquetar_deuda_mens_datos,
     "deuda_mens_calendario": etiquetar_deuda_mens_calendario,
     "titulos_estructura": etiquetar_titulos_estructura,
+    "deuda_ant": etiquetar_deuda_ant,
 }
 
 
@@ -1001,10 +1223,32 @@ def main(argv=None):
             print(f"   [mecD] {fuente:<22} etiqueta sin resolver: "
                   f"{r['etiqueta']!r} ({r['anio']}) — {r['url'].rsplit('/', 1)[-1]}")
 
-        elegidos = ([i for i in items if not i["periodo_incierto"]]
-                    if backfill else seleccionar(items))
+        # CADENCIA "archivo": la pagina se mira todos los dias, los archivos
+        # NO. Una pagina que solo guarda historia cerrada no tiene ediciones
+        # nuevas que ventanear; correr seleccionar() ahi baja los mismos
+        # objetos todos los dias, para siempre, contra un servidor del Estado.
+        #
+        # El etiquetador se corre IGUAL: si la fuente escribe una etiqueta
+        # nueva que no resuelve, eso tiene que sonar el mismo dia.
+        #
+        # Y se DICE en el log y se ESCRIBE en el manifiesto. Un "0 a capturar"
+        # sin explicacion es indistinguible de un bug, y un manifiesto que no
+        # cuenta lo que omitio no prueba que la omision fue deliberada.
+        archivo_cerrado = cfg.get("cadencia") == "archivo" and not backfill
+        if archivo_cerrado:
+            elegidos = []
+            # ent_pag ya esta en `entradas`, pero es el mismo objeto: lo que se
+            # agregue aca viaja al manifiesto.
+            ent_pag["cadencia"] = "archivo"
+            ent_pag["archivos_listados"] = len(items)
+            ent_pag["archivos_omitidos_en_normal"] = len(items)
+        else:
+            elegidos = ([i for i in items if not i["periodo_incierto"]]
+                        if backfill else seleccionar(items))
+        nota = "  [cadencia archivo: los archivos van solo con --backfill]" \
+            if archivo_cerrado else ""
         print(f"   [mecD] {fuente:<22} {len(items)} links · "
-              f"{len(raros)} sin resolver · {len(elegidos)} a capturar")
+              f"{len(raros)} sin resolver · {len(elegidos)} a capturar{nota}")
 
         for it in elegidos:
             capturado = datetime.now(timezone.utc).isoformat(timespec="seconds")
@@ -1044,7 +1288,10 @@ def main(argv=None):
                 #
                 # Son hechos de la fuente, que es literalmente el producto.
                 for extra in ("href_roto_en_la_fuente", "etiqueta_corregida",
-                              "anio_en_el_nombre", "fecha_en_el_nombre"):
+                              "anio_en_el_nombre", "fecha_en_el_nombre",
+                              "esquema_corregido_por_guarismo",
+                              "unidad_declarada", "fecha_en_la_celda", "producto_no_canonico",
+                              "conflicto_celda_vs_etiqueta"):
                     if extra in it:
                         entrada[extra] = it[extra]
                 if ufin and ufin != it["url"]:
@@ -1065,10 +1312,21 @@ def main(argv=None):
                     print(f"   [mecD] {clave:<30} sin cambios {len(datos):>9} bytes  {sha[:12]}…")
                 ok += 1
             except Exception as e:
+                # MISMO DEFECTO QUE SE CORRIGIO HOY EN LA RAMA QUE ANDA, EN
+                # LA RAMA QUE FALLA: el hueco tambien se armaba campo por
+                # campo, sin los hechos de la fuente. Un link roto o publicado
+                # en HTTP plano es JUSTO el que tiene mas chance de fallar, y
+                # era justo el caso en el que el hecho se perdia.
                 entrada = {"fuente": fuente, "tipo": "archivo", "archivo": clave,
                            "periodo": it["periodo"], "url": it["url"],
                            "capturado_utc": capturado,
                            "error": f"{type(e).__name__}: {e}"}
+                for extra in ("href_roto_en_la_fuente", "etiqueta_corregida",
+                              "anio_en_el_nombre", "fecha_en_el_nombre",
+                              "esquema_corregido_por_guarismo",
+                              "conflicto_celda_vs_etiqueta"):
+                    if extra in it:
+                        entrada[extra] = it[extra]
                 huecos += 1
                 print(f"   [mecD] {clave:<30} HUECO — {type(e).__name__}: {e}")
 
