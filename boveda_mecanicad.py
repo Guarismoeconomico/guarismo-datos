@@ -136,6 +136,19 @@ MESES = {
 
 TRIMESTRES = {"i": 1, "ii": 2, "iii": 3, "iv": 4}
 
+MES_NOMBRE = {v: k for k, v in MESES.items() if k != "setiembre"}
+
+# Erratas REALES de la fuente, verificadas a mano el 7-sep-2026. No es una
+# heuristica ni una correccion ortografica automatica: es una lista corta,
+# escrita por un humano, de textos que el organismo publico mal.
+#
+# Y aun asi NO alcanza sola. Un alias solo se aplica si el NOMBRE DEL ARCHIVO
+# contiene el mes canonico: dos señales independientes, igual que _es_html().
+# Si las dos no coinciden, la etiqueta queda incierta y no se archiva.
+ALIAS_MES = {
+    "abil": 4,   # sector_publico_base_caja_-_abril_23.xlsx (Hacienda, 2023)
+}
+
 
 # ---------------------------------------------------------------------------
 # Fuentes
@@ -247,7 +260,40 @@ def _href(crudo):
     return re.sub(r"^blank:#", "", _html.unescape(crudo or "").strip())
 
 
+ESQUEMA_DOBLE = re.compile(r"^https?:?//https?:?//", re.I)
+
+
+def _roto(href):
+    """¿El href trae el esquema repetido? Es un defecto de la fuente, no nuestro.
+
+    EL CASO REAL, y la correccion de lo que estaba anotado.
+        El informe del IV trimestre 2019 de la Secretaria de Finanzas apunta a
+        una URL rota desde 2019. Estaba anotado de memoria como
+        "https://https://" — es FALSO. El href real es:
+
+            https://https//www.argentina.gob.ar/sites/default/files/...
+
+        Le falta el SEGUNDO dos puntos. Se ve en el HTML guardado y se ve en el
+        error del runner, que dijo host='https' y path='//www.argentina...':
+        requests leyo "https" como nombre de host, que es exactamente lo que
+        pasa con un solo "//" y sin ":".
+
+        Una regex escrita contra la version recordada no lo agarraba. Por eso
+        la palabra de verificacion se cuenta de verdad y la URL se mira.
+
+    Se normaliza para poder capturarlo, PERO queda constancia en el manifiesto
+    de que la fuente lo publico roto. Arreglarlo en silencio seria borrar un
+    hecho de la fuente, y esos hechos son el producto.
+    """
+    return bool(ESQUEMA_DOBLE.match(href or ""))
+
+
 def _absoluta(href, base):
+    # https://https//... y https://https://... -> https://...
+    href = href or ""
+    while ESQUEMA_DOBLE.match(href):
+        href = re.sub(r"^https?:?//", "", href, count=1)
+    href = re.sub(r"^(https?):?//", r"\1://", href, count=1)
     if href.startswith("http://") or href.startswith("https://"):
         return href
     if href.startswith("//"):
@@ -277,19 +323,40 @@ def etiquetar_hacienda(pagina, base):
             url = _absoluta(a, base)
             if not url or anio is None:
                 continue
-            etiqueta = b
-            mes = MESES.get((etiqueta or "").strip().lower())
-            salida.append({
+            etiqueta = (b or "").strip()
+            norm = etiqueta.lower()
+            it = {
                 "familia": familia or "(sin familia)",
                 "producto": "archivo",
                 "etiqueta": etiqueta,
                 "anio": anio,
-                "orden": mes,
-                "periodo": f"{anio}-{mes:02d}" if mes else None,
-                "periodo_incierto": mes is None,
                 "url": url,
                 "ext": ext,
-            })
+            }
+            if _roto(a):
+                it["href_roto_en_la_fuente"] = True
+
+            mes = MESES.get(norm)
+
+            # Errata conocida + confirmacion en el nombre del archivo.
+            if mes is None and norm in ALIAS_MES:
+                cand = ALIAS_MES[norm]
+                if MES_NOMBRE[cand] in url.lower():
+                    mes, it["etiqueta_corregida"] = cand, MES_NOMBRE[cand]
+
+            # "Descargar anual 2018": no es un mes, es el agregado del año.
+            # Se acepta solo si el año del texto coincide con el del <h4>.
+            m_an = re.match(r"descargar\s+anual\s+((?:19|20)\d{2})", norm)
+            if mes is None and m_an and int(m_an.group(1)) == anio:
+                it.update(producto="anual", orden=13, periodo=f"{anio}-anual",
+                          periodo_incierto=False)
+                salida.append(it)
+                continue
+
+            it.update(orden=mes,
+                      periodo=f"{anio}-{mes:02d}" if mes else None,
+                      periodo_incierto=mes is None)
+            salida.append(it)
     return salida
 
 
@@ -314,7 +381,7 @@ def etiquetar_finanzas(pagina, base):
                 continue
             m = re.match(r"\s*(IV|III|II|I)\b", (trim_txt or ""), re.I)
             tr = TRIMESTRES.get(m.group(1).lower()) if m else None
-            salida.append({
+            it = {
                 "familia": "Deuda publica trimestral",
                 "producto": (b or "archivo").strip(),
                 "etiqueta": trim_txt,
@@ -324,7 +391,10 @@ def etiquetar_finanzas(pagina, base):
                 "periodo_incierto": tr is None,
                 "url": url,
                 "ext": ext,
-            })
+            }
+            if _roto(a):
+                it["href_roto_en_la_fuente"] = True
+            salida.append(it)
     return salida
 
 
@@ -518,8 +588,39 @@ def main(argv=None):
         pagina = pagina_b.decode("utf-8", errors="replace")
         sha_pag = hashlib.sha256(pagina_b).hexdigest()
         cl_pag = f"{fuente}_pagina"
-        previo = (estado.get(cl_pag) or {}).get("sha256")
+        prev = estado.get(cl_pag) or {}
+        previo = prev.get("sha256")
         mtime = modified_time(pagina)
+
+        # LA PAGINA NO SE GATILLA POR HASH — descubierto el 7-sep-2026.
+        #
+        # Dos capturas separadas por NUEVE MINUTOS dieron el mismo tamaño
+        # exacto (50.794 y 45.258 bytes) y sha256 distinto, con el
+        # article:modified_time sin moverse. Las paginas de argentina.gob.ar
+        # reserializan en cada render.
+        #
+        # Gatillar por hash tendria dos consecuencias, y la segunda es grave:
+        #   1. se archivaria la pagina todos los dias, para siempre;
+        #   2. la serie de PUNTUALIDAD quedaria envenenada. Si "la pagina
+        #      cambio" pasa todos los dias, el dia que Finanzas publique la
+        #      deuda del II-2026 ese cambio no se distingue del ruido. Se
+        #      pierde justo lo que el modulo venia a medir.
+        #
+        # Es la regla que ya estaba escrita para el icc_op_art15: el hash solo
+        # no declara revision. Manda lo que el CMS DECLARA. El hash se sigue
+        # registrando siempre, y la reserializacion queda anotada como lo que
+        # es: una conducta medida de la fuente.
+        prev_mt = prev.get("article_modified_time")
+        if previo is None:
+            cambio_pag, motivo = True, "primera captura"
+        elif mtime:
+            cambio_pag = (mtime != prev_mt)
+            motivo = "article_modified_time"
+        else:
+            # Sin fecha declarada no queda otra que el hash, y se dice.
+            cambio_pag = (sha_pag != previo)
+            motivo = "hash (la pagina no declara modified_time)"
+        reserializa = (sha_pag != previo) and not cambio_pag
 
         ent_pag = {
             "fuente": fuente, "tipo": "pagina", "url": cfg["url"],
@@ -530,21 +631,28 @@ def main(argv=None):
             "etag": headers.get("ETag"),
             "content_type": headers.get("Content-Type"),
             "article_modified_time": mtime,
-            "cambio": sha_pag != previo,
+            "cambio": cambio_pag,
+            "motivo_cambio": motivo,
+            # El binario es distinto pero la fuente no declaro publicacion:
+            # es reserializacion, no revision. Se mide, no se archiva.
+            "reserializa": reserializa,
         }
-        if sha_pag != previo:
+        if cambio_pag:
             ent_pag["objeto"] = guardar(s3, bucket, sello, ahora, cl_pag,
                                         pagina_b, "html", cfg["url"],
                                         capturado, sha_pag, seco)
             if not seco:
                 estado[cl_pag] = {"sha256": sha_pag, "objeto": ent_pag["objeto"],
+                                  "article_modified_time": mtime,
                                   "visto_utc": capturado}
             nuevos += 1
             print(f"   [mecD] {cl_pag:<30} {'NUEVO  →' if previo else 'PRIMERA→'} "
-                  f"{len(pagina_b):>8} bytes  mod={mtime}")
+                  f"{len(pagina_b):>8} bytes  mod={mtime}  ({motivo})")
         else:
-            ent_pag["objeto"] = (estado.get(cl_pag) or {}).get("objeto")
-            print(f"   [mecD] {cl_pag:<30} sin cambios {len(pagina_b):>8} bytes  mod={mtime}")
+            ent_pag["objeto"] = prev.get("objeto")
+            extra = "  [reserializa: mismo mod, otro hash]" if reserializa else ""
+            print(f"   [mecD] {cl_pag:<30} sin cambios {len(pagina_b):>8} bytes  "
+                  f"mod={mtime}{extra}")
         ok += 1
         entradas.append(ent_pag)
 
@@ -666,8 +774,10 @@ def main(argv=None):
     if huecos:
         print(f"⚠ {huecos} hueco(s) registrado(s). Revisar arriba cuales.")
     if inciertos:
-        print(f"⚠ {inciertos} etiqueta(s) sin resolver: la fuente cambio el texto "
-              f"de un link. Revisar antes de que se pierda una edicion.")
+        print(f"⚠ {inciertos} etiqueta(s) sin resolver. Las erratas conocidas al "
+              f"7-sep-2026 ('Abil', 'Descargar anual') YA se resuelven solas: si "
+              f"esto suena, la fuente escribio algo nuevo. Mirar los renglones "
+              f"'etiqueta sin resolver' de arriba antes de que se pierda una edicion.")
     return 0
 
 
