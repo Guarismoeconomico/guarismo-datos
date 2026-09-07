@@ -33,9 +33,23 @@ CINCO PATRONES DE URL — verificados el 3, el 4 y el 7-sep-2026
     como mecanica D (scraping). No hace falta: se prueban los dias de la
     ventana de publicacion y el que no existe devuelve la pagina de error del
     INDEC, que _es_html() ya trata igual que un 404. Es el mismo truco que (c),
-    con otra unidad de tiempo. Lo que SIGUE siendo mecanica D es lo que no
-    tiene nombre predecible: el cuadro vivo del art. 15 del ICC, detras de
-    bajarCuadroEstadistico.asp?idc=<hash>.
+    con otra unidad de tiempo.
+
+DOS VECES SE DIO POR IMPOSIBLE ALGO QUE ERA UNA LINEA
+    El cuadro vivo del articulo 15 (redeterminacion de obra publica) estaba
+    anotado como mecanica D porque en la web vive detras de
+    bajarCuadroEstadistico.asp?idc=<hash>. Verificado el 7-sep-2026: ese idc
+    ROTA EN CADA RENDER de la pagina — se rendereo la misma pagina dos veces y
+    los tres tokens dieron distinto. Cablear el idc habria funcionado un dia y
+    fallado al siguiente, en silencio.
+
+    Pero el .asp es solo un envoltorio. El MISMO cuadro tiene URL plana y fija:
+    op_icc_sipm_2016.xls, servida por el sitio actual con content-type
+    application/vnd.ms-excel. El "2016" es el anio de arranque de la serie, NO
+    la version: el archivo bajado el 7-sep-2026 trae datos hasta julio de 2026.
+
+    REGLA QUE QUEDA: antes de escribir un scraper para un link ofuscado, buscar
+    la URL plana del mismo archivo en la pagina vieja del organismo. Dos de dos.
 
 QUE HACE
     Baja cada archivo, lo hashea, y lo sube a R2 SOLO SI CAMBIO respecto de la
@@ -123,8 +137,10 @@ DIA_HASTA = 24
 #   (e) URL con el MES de publicacion mensual (sh_ipc_08_26.xls). Se escribe
 #       {mes} y lo resuelve _meses_publicacion() con caida al mes anterior.
 #
-# Lo que NO entra aca sigue siendo lo que no tiene nombre predecible: el cuadro
-# vivo del art. 15 del ICC, detras de bajarCuadroEstadistico.asp?idc=<hash>.
+# Lo que NO entra aca es lo que no tiene nombre predecible NI URL plana: los
+# comunicados de Hacienda con slug cambiante, el listado de SAGyP. El cuadro
+# vivo del art. 15 del ICC SI entra: su link web lleva un idc que rota en cada
+# render, pero el mismo archivo tiene URL plana y fija (ver icc_op_art15).
 #
 # NOTA SOBRE EL IPC: se captura y se hashea. ARCHIVAR NO ES PUBLICAR. Nada de
 # esto sale a ninguna pantalla como afirmacion propia de Guarismo. Misma regla
@@ -291,10 +307,10 @@ ARCHIVOS = {
     # que incide en la provisoriedad del capitulo Mano de obra y, por arrastre,
     # del nivel general. Ese par provisorio/definitivo es el producto.
     #
-    # OJO: el cuadro VIVO del art. 15 vive detras de un link dinamico
-    # (bajarCuadroEstadistico.asp?idc=<hash>) y NO se puede cablear aca.
-    # Va por mecanica D. Los 9 archivos SH-ICC-* de serie historica terminan
-    # en octubre de 2015 — son backfill Clase B, bloque aparte.
+    # El cuadro VIVO del art. 15 SI se puede cablear: ver icc_op_art15 abajo.
+    # Su link en la web lleva un idc que rota en cada render, pero el mismo
+    # archivo tiene URL plana y fija. Los 7 archivos SH-ICC-* de serie
+    # historica terminan en octubre de 2015 — backfill Clase B, bloque aparte.
     "sipm_series": {
         "url": "https://www.indec.gob.ar/ftp/cuadros/economia/series_sipm_dic2015.xls",
         "ext": "xls",
@@ -312,9 +328,36 @@ ARCHIVOS = {
     "icc_metodologia": {
         "url": "https://www.indec.gob.ar/ftp/cuadros/economia/metodologia_icc.pdf",
         "ext": "pdf",
-        "desc": "Metodologia del ICC en el Gran Buenos Aires, base 1993=100. Es la "
-                "unica URL fija que el informe del ICC publica: los cuadros del "
-                "regimen de redeterminacion no tienen URL directa.",
+        "desc": "Metodologia del ICC en el Gran Buenos Aires, base 1993=100.",
+    },
+    # --- EL CUADRO VIVO DEL ARTICULO 15 — el insumo vendible del segmento #2 --
+    # Doce cuadros en nueve solapas: IPIB por inciso, ICC continuacion, ICC,
+    # servicios, mano de obra, equipos, gastos generales y materiales, con la
+    # estructura del art. 15 inciso por inciso (e, i, j, k, t, w...).
+    #
+    # LA FUENTE DECLARA SU VENTANA PROVISORIA CON FECHAS, y ICC e IPIB tienen
+    # ventanas DISTINTAS en el mismo archivo. En la edicion bajada el 7-sep-2026:
+    # ICC provisorio de febrero a julio de 2026 (SEIS meses), IPIB solo julio
+    # (UNO). Esa frase cambia edicion a edicion: es serie propia, igual que el
+    # porcentaje de documentacion pendiente del ICA. Se archiva, no se comenta.
+    #
+    # Y la misma frase aparece con DOS palabras distintas dentro del archivo:
+    # "provisorios" en las tres solapas de IPIB, "preliminares" en las nueve
+    # del ICC. Ademas, en la solapa 11 y 12 una de las dos notas quedo un mes
+    # atrasada. Nada de eso se interpreta: se registra con fecha.
+    "icc_op_art15": {
+        "url": "https://www.indec.gob.ar/ftp/cuadros/economia/op_icc_sipm_2016.xls",
+        "ext": "xls",
+        "desc": "Obra publica. Cuadro VIVO del articulo 15 del Anexo Metodologico: "
+                "ICC e IPIB por inciso, mas capitulos materiales, mano de obra, "
+                "gastos generales, equipos y servicios. Es el insumo legal de la "
+                "redeterminacion de precios (Dec. 1295/02, hoy via 490/2023). "
+                "Patron (a), URL fija: el '2016' del nombre es el anio de arranque "
+                "de la serie, NO la version — verificado el 7-sep-2026, el archivo "
+                "trae datos hasta julio de 2026 y su metadato OLE dice guardado el "
+                "14-ago-2026. En la web el INDEC lo sirve detras de "
+                "bajarCuadroEstadistico.asp?idc=<hash>, con un idc que ROTA en cada "
+                "render; esta URL plana es el mismo objeto y no rota.",
     },
 
     # --- Tier 2: salarios -------------------------------------------------
@@ -597,8 +640,8 @@ def urls_candidatas(url):
         anterior. Eso cubre la ventana real entre que el periodo arranca y que
         el INDEC efectivamente publica.
 
-    Lo unico que NO se resuelve asi es lo que no tiene nombre predecible: el
-    cuadro vivo del art. 15 del ICC vive detras de un link dinamico con hash.
+    Lo unico que NO se resuelve asi es lo que no tiene nombre predecible NI URL
+    plana: los comunicados de Hacienda con slug cambiante y el listado de SAGyP.
     """
     if "{trim}" in url:
         return [url.replace("{trim}", f"{mm:02d}_{aa:02d}")
