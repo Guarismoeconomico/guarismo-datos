@@ -51,10 +51,19 @@ LO QUE HACE DISTINTO A ESTE MODULO
         y la etiqueta cruda queda en el manifiesto para que la vea un humano.
 
     (4) LA CADENCIA ES DIARIA, Y ESO ES A PROPOSITO.
-        La Secretaria de Finanzas NO publica calendario. La deuda del II
-        trimestre 2026 tiene que aparecer a fin de septiembre. Mirando la
-        pagina todos los dias, el archivo registra EL DIA EXACTO en que
-        aparecio. Con cadencia trimestral, esa fecha se pierde para siempre.
+        CORRECCION DEL 7-sep-2026: aca decia "la Secretaria de Finanzas NO
+        publica calendario". Es FALSO, y se corrige donde estaba escrito.
+        Finanzas SI publica calendario del reporte MENSUAL de deuda, con hora
+        (16:00), colgado de la pagina madre datos-mensuales-de-la-deuda. Lo
+        que NO tiene calendario publicado es el reporte TRIMESTRAL: la deuda
+        del II trimestre 2026 tiene que aparecer a fin de septiembre y nadie
+        prometio que dia. Mirando la pagina todos los dias, el archivo
+        registra EL DIA EXACTO en que aparecio. Con cadencia trimestral, esa
+        fecha se pierde para siempre.
+
+        Y ahora hay las dos cosas, que es mejor todavia: para el mensual,
+        prometido (el calendario, archivado) contra observado (el dia que el
+        archivo cambia). Para el trimestral, solo observado.
         Es la serie de puntualidad del Tier 4, gratis.
 
         El costo son dos GET por dia. El hash decide si se guarda algo.
@@ -138,6 +147,13 @@ TRIMESTRES = {"i": 1, "ii": 2, "iii": 3, "iv": 4}
 
 MES_NOMBRE = {v: k for k, v in MESES.items() if k != "setiembre"}
 
+# "Julio 2026" en una celda. Se arma desde MESES para que agregar un nombre no
+# requiera acordarse de tocar dos lugares. Ordenada por largo descendente para
+# que el alternador no corte un nombre por la mitad.
+MES_ANIO = re.compile(
+    r"\b(" + "|".join(sorted(MESES, key=len, reverse=True)) +
+    r")\s+((?:19|20)\d{2})\b", re.I)
+
 # Erratas REALES de la fuente, verificadas a mano el 7-sep-2026. No es una
 # heuristica ni una correccion ortografica automatica: es una lista corta,
 # escrita por un humano, de textos que el organismo publico mal.
@@ -165,6 +181,49 @@ FUENTES = {
         "url": "https://www.argentina.gob.ar/economia/finanzas/datos-trimestrales-de-la-deuda",
         "desc": "Secretaria de Finanzas — datos trimestrales de la deuda publica",
         "etiquetador": "finanzas",
+        "organismo": "Secretaria de Finanzas",
+    },
+
+    # --- Deuda MENSUAL. Reconocida el 7-sep-2026. Son TRES paginas. ---
+    #
+    # No es una pagina con dos tablas: son tres URLs distintas, y cada una se
+    # fecha sola por separado. Las dos hijas se movieron el 18-ago-2026 con
+    # trece minutos de diferencia; la madre, el 8-ene-2026 (cuando subieron el
+    # calendario del año). Tres relojes independientes de la misma oficina.
+    "finanzas_deuda_mens_informes": {
+        # OJO: 55 ediciones, enero 2022 -> julio 2026, y adivinar el nombre es
+        # imposible. Ocho llevan sufijo de Drupal (_0/_1/_2), dos tienen la
+        # fecha de publicacion pegada al año (marzo-20231704, julio_20221608),
+        # dos terminan en guion bajo colgando, y el separador mes/año cambia
+        # dos veces dentro de 2022. Manda la pagina.
+        "url": "https://www.argentina.gob.ar/economia/finanzas/datos-mensuales-de-la-deuda/informes-mensuales",
+        "desc": "Secretaria de Finanzas — boletin mensual de deuda (informes)",
+        "etiquetador": "deuda_mens_informes",
+        "organismo": "Secretaria de Finanzas",
+    },
+    "finanzas_deuda_mens_datos": {
+        # LA URL CANONICA. La que estaba anotada en la cola
+        # (.../datos-mensuales-de-la-deuda/datos) REDIRIGE aca. Se cablea el
+        # destino, no el salto.
+        #
+        # Y el hallazgo grueso: esta pagina tiene UNA SOLA FILA y la pisa cada
+        # mes. Al reves que la trimestral, que lista las 29 ediciones. O sea:
+        # el .xlsx mensual es Clase A o no es. Backfillearlo exigiria adivinar
+        # URLs, y el archivo de julio 2026 ya viene con _0.
+        "url": "https://www.argentina.gob.ar/economia/finanzas/datos-mensuales",
+        "desc": "Secretaria de Finanzas — serie mensual de deuda (xlsx vigente)",
+        "etiquetador": "deuda_mens_datos",
+        "organismo": "Secretaria de Finanzas",
+    },
+    "finanzas_deuda_mens_calendario": {
+        # La pagina madre. Existe por UNA sola cosa: cuelga de aca el
+        # calendario_de_publicaciones_{anio}.pdf. Se entra por la pagina y no
+        # por un {anio} adivinado, porque un patron estable hacia adelante no
+        # es un patron para el backfill (leccion del calendario del INDEC, que
+        # cambio de convencion tres veces).
+        "url": "https://www.argentina.gob.ar/economia/finanzas/datos-mensuales-de-la-deuda",
+        "desc": "Secretaria de Finanzas — calendario de publicaciones de deuda",
+        "etiquetador": "deuda_mens_calendario",
         "organismo": "Secretaria de Finanzas",
     },
 }
@@ -398,7 +457,132 @@ def etiquetar_finanzas(pagina, base):
     return salida
 
 
-ETIQUETADORES = {"hacienda": etiquetar_hacienda, "finanzas": etiquetar_finanzas}
+def _deuda_mensual(pagina, base, producto):
+    """Motor de las DOS tablas mensuales de deuda. La primera celda es el periodo.
+
+    Las dos paginas tienen la misma forma de tabla y una diferencia:
+
+        Informes   "Julio 2026"                        -> 55 filas
+        Datos      "Serie mensual 2019 - Julio 2026"   -> 1 fila, un RANGO
+
+    La misma lectura sirve para las dos: se toma el ULTIMO par mes+año de la
+    celda. En Informes hay uno solo. En Datos, el ultimo es el fin del rango,
+    que es exactamente el dato que trae el archivo. El "2019" del arranque no
+    matchea porque no lleva mes adelante.
+
+    EL PRODUCTO NO SALE DE LA PAGINA, y esto es a proposito. En las dos
+    tablas el texto del link dice "Descargar" y nada mas. Al reves que en la
+    deuda trimestral, donde el link SI dice el producto (Base de Datos /
+    Excel / Informe). Por eso lo fija la fuente. Inventar un producto a partir
+    de "Descargar" seria escribir en el manifiesto algo que la fuente no dijo.
+    """
+    periodo_txt, primera, salida = None, True, []
+    for tipo, a, b in eventos(pagina):
+        if tipo == "fila":
+            periodo_txt, primera = None, True
+        elif tipo == "celda":
+            if primera:
+                periodo_txt, primera = b, False
+        elif tipo == "link":
+            ext = _ext_de(a)
+            if ext not in EXTENSIONES:
+                continue
+            url = _absoluta(a, base)
+            if not url:
+                continue
+            ms = MES_ANIO.findall(periodo_txt or "")
+            mes = MESES.get(ms[-1][0].lower()) if ms else None
+            anio = int(ms[-1][1]) if ms else None
+            it = {
+                "familia": "Deuda publica mensual",
+                "producto": producto,
+                "etiqueta": periodo_txt,
+                "anio": anio,
+                "orden": mes,
+                "periodo": f"{anio}-{mes:02d}" if (anio and mes) else None,
+                "periodo_incierto": not (anio and mes),
+                "url": url,
+                "ext": ext,
+            }
+            if _roto(a):
+                it["href_roto_en_la_fuente"] = True
+            salida.append(it)
+    return salida
+
+
+def etiquetar_deuda_mens_informes(pagina, base):
+    """55 boletines en PDF, enero 2022 -> julio 2026."""
+    return _deuda_mensual(pagina, base, "informe")
+
+
+def etiquetar_deuda_mens_datos(pagina, base):
+    """Una fila: el xlsx de la serie mensual. Se pisa todos los meses."""
+    return _deuda_mensual(pagina, base, "datos")
+
+
+def etiquetar_deuda_mens_calendario(pagina, base):
+    """La pagina madre: un PDF suelto, sin tabla y SIN periodo que leer.
+
+    El calendario de publicaciones no describe un mes: es el documento
+    VIGENTE. Se reemplaza cuando cambia el año Y TAMBIEN cuando lo corrigen a
+    mitad de camino — el INDEC hace exactamente eso con el suyo ("Actualizado
+    al 20/05/2025"). Por eso el periodo es "vigente" y la clave es estable:
+    cada version nueva entra como un objeto mas, con su sello y su hora, y la
+    serie de objetos ES la historia de las correcciones.
+
+    LA REGLA 2 SIGUE EN PIE. El periodo no se saca del nombre del archivo:
+    aca sencillamente NO HAY periodo que leer, igual que en apendice6.xlsx.
+    El año que trae el nombre se guarda aparte y rotulado como leido de la
+    URL, porque es un hecho de la fuente y no una etiqueta que declaro.
+
+    Cualquier OTRO archivo que aparezca en esta pagina cae como etiqueta sin
+    resolver: no se archiva, pero suena la alarma y lo mira un humano. Es el
+    comportamiento buscado, no un agujero.
+    """
+    salida = []
+    for tipo, a, b in eventos(pagina):
+        if tipo != "link":
+            continue
+        ext = _ext_de(a)
+        if ext not in EXTENSIONES:
+            continue
+        url = _absoluta(a, base)
+        if not url:
+            continue
+        nombre = url.rsplit("/", 1)[-1].lower()
+        etiqueta = (b or "").strip()
+        # Dos señales, como siempre: el nombre del archivo O el texto del link.
+        es_cal = "calendario" in nombre or "calendario" in etiqueta.lower()
+        it = {
+            "familia": "Calendario de publicaciones",
+            "producto": "calendario" if es_cal else (_slug(etiqueta, 12) or "archivo"),
+            "etiqueta": etiqueta,
+            "anio": None,
+            "orden": None,
+            "periodo": None,
+            "periodo_incierto": True,
+            "url": url,
+            "ext": ext,
+        }
+        if es_cal:
+            m = re.search(r"((?:19|20)\d{2})", nombre)
+            it.update(periodo="vigente", periodo_incierto=False, orden=1,
+                      anio=int(m.group(1)) if m else 0)
+            if m:
+                it["anio_en_el_nombre"] = int(m.group(1))
+        if _roto(a):
+            it["href_roto_en_la_fuente"] = True
+        salida.append(it)
+    return salida
+
+
+ETIQUETADORES = {
+    "hacienda": etiquetar_hacienda,
+    "finanzas": etiquetar_finanzas,
+    "deuda_mens_informes": etiquetar_deuda_mens_informes,
+    "deuda_mens_datos": etiquetar_deuda_mens_datos,
+    "deuda_mens_calendario": etiquetar_deuda_mens_calendario,
+}
 
 
 def seleccionar(items, ventana=VENTANA):
@@ -547,14 +731,28 @@ def main(argv=None):
     solo = None
     for a in argv:
         if a.startswith("--fuente="):
-            solo = a.split("=", 1)[1]
+            # Acepta lista: --fuente=a,b,c. Con un solo nombre se comporta
+            # igual que antes. Hace falta porque un backfill pelado rebaja
+            # las 204 ediciones ya selladas de Hacienda y Finanzas trimestral
+            # para nada.
+            solo = {s.strip() for s in a.split("=", 1)[1].split(",") if s.strip()}
 
     ahora = datetime.now(timezone.utc)
     run = re.sub(r"[^a-zA-Z0-9]+", "", os.getenv("GITHUB_RUN_ID", "local"))[:20]
     sello = f"{ahora:%Y%m%dT%H%M%SZ}_{run or 'local'}"
     bucket = os.getenv("R2_BUCKET") or BUCKET_DEFAULT
 
-    fuentes = {k: v for k, v in FUENTES.items() if solo is None or k == solo}
+    if solo is not None:
+        # Un typo en --fuente= dejaba cero fuentes, y el modulo terminaba
+        # diciendo "Fallaron TODAS las descargas". Es un diagnostico FALSO: no
+        # fallo nada, no se pidio nada. Se aborta y se dice cual fue el error.
+        desconocidas = sorted(solo - set(FUENTES))
+        if desconocidas:
+            print(f"[mecD] fuente(s) inexistente(s): {', '.join(desconocidas)}")
+            print(f"[mecD] disponibles: {', '.join(sorted(FUENTES))}")
+            return 2
+
+    fuentes = {k: v for k, v in FUENTES.items() if solo is None or k in solo}
     modo = "BACKFILL (historico completo)" if backfill else f"normal (ventana {VENTANA})"
     print(f"[mecD] {len(fuentes)} fuente(s) · modo {modo}")
     if backfill:
@@ -701,6 +899,21 @@ def main(argv=None):
                     "posible_resubida": _posible_resubida(it["url"]),
                     "cambio": cambio,
                 }
+
+                # DEFECTO CORREGIDO EL 7-sep-2026.
+                #
+                # Los etiquetadores marcaban href_roto_en_la_fuente (el link
+                # del IV trimestre 2019, roto desde 2019) y etiqueta_corregida
+                # (el "Abil" de Hacienda) sobre el item... y main() armaba el
+                # manifiesto campo por campo, sin copiarlos. Los dos hechos se
+                # descubrian, se marcaban y se TIRABAN antes de escribir el
+                # JSON. El manifiesto no los tenia nunca.
+                #
+                # Son hechos de la fuente, que es literalmente el producto.
+                for extra in ("href_roto_en_la_fuente", "etiqueta_corregida",
+                              "anio_en_el_nombre"):
+                    if extra in it:
+                        entrada[extra] = it[extra]
                 if ufin and ufin != it["url"]:
                     entrada["url_final"] = ufin
 
