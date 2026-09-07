@@ -1,7 +1,7 @@
 name: Guarismo boveda diaria
 
 # Corre TODOS los modulos de boveda de cadencia diaria en secuencia, con un
-# solo reloj.
+# solo reloj. Son CUATRO: datos.gob.ar, INDEC, BCRA y mecanica D.
 #
 # Por que agrupado por CADENCIA y no por fuente: un workflow por modulo son
 # doce relojes en dos meses, y el dia que se regenere el PAT hay que tocarlos
@@ -78,3 +78,31 @@ jobs:
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           R2_BUCKET: guarismo-crudo
         run: python boveda_bcra.py
+
+      # Mecanica D: paginas fijas con listado (Hacienda fiscal + Finanzas deuda).
+      #
+      # POR QUE ENTRA AL DIARIO SI LAS FUENTES SON MENSUAL Y TRIMESTRAL
+      #   Porque lo que se mide es CUANDO publican. La Secretaria de Finanzas
+      #   no publica calendario: la deuda del II trimestre 2026 tiene que
+      #   aparecer a fin de septiembre y nadie dice que dia. Mirando todos los
+      #   dias, el archivo registra la fecha exacta. Con cadencia trimestral esa
+      #   fecha se pierde para siempre, y es la serie de puntualidad del Tier 4.
+      #
+      # QUE CUESTA EN REGIMEN: cero.
+      #   Verificado el 7-sep-2026: la corrida normal da "14 OK · 0 nuevos" y
+      #   escribe CERO bytes. Se bajan ~7,7 MB y el gatillo decide que no hay
+      #   nada nuevo. Solo escribe el dia que el organismo publica.
+      #
+      # SIN RELOJ PROPIO: entra a este workflow, que ya tiene el suyo. Un
+      # modulo nuevo NO agrega un cronjob mas a cron-job.org.
+      #
+      # El BACKFILL no corre aca. Vive en boveda-mecanicad-manual.yml y se
+      # dispara a mano.
+      - name: Capturar mecanica D a R2 (Hacienda + Finanzas)
+        if: always()          # corre aunque los modulos anteriores hayan fallado
+        env:
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET: guarismo-crudo
+        run: python boveda_mecanicad.py
