@@ -15,7 +15,7 @@ POR QUE EXISTE
 
     Lo que no se captura el dia que estaba, no se recupera nunca.
 
-CUATRO PATRONES DE URL — verificado el 3 y el 4-sep-2026
+CINCO PATRONES DE URL — verificados el 3, el 4 y el 7-sep-2026
     (a) Fija de verdad: sh_emae_mensual_base2004.xls. El caso ideal.
     (b) Con el año adentro: sh_isac_2026.xls. Fija doce meses y despues rota.
         Se escribe {anio} y lo resuelve urls_candidatas() — automatico, para
@@ -24,6 +24,10 @@ CUATRO PATRONES DE URL — verificado el 3 y el 4-sep-2026
         Se escribe {trim} y lo resuelve _trimestres_publicacion().
     (d) Con el DIA DE PUBLICACION adentro: ica_cuadros_20_08_26.xls, donde el
         20 es el dia en que salio el informe y cambia mes a mes.
+    (e) Con el MES DE PUBLICACION mensual: sh_ipc_08_26.xls,
+        variaciones_salarios_08_26.xls. Se escribe {mes} y lo resuelve
+        _meses_publicacion(). Es el patron mas barato de los cinco: no hay
+        ventana de dias que probar, solo el mes corriente y el anterior.
 
     El patron (d) parecia imposible de cablear y por eso el ICA estaba anotado
     como mecanica D (scraping). No hace falta: se prueban los dias de la
@@ -116,6 +120,8 @@ DIA_HASTA = 24
 #       Se escribe {trim}.
 #   (d) URL con el DIA de publicacion (ica_cuadros_20_08_26.xls). Se escribe
 #       {dia} y lo resuelve _dias_publicacion() probando la ventana.
+#   (e) URL con el MES de publicacion mensual (sh_ipc_08_26.xls). Se escribe
+#       {mes} y lo resuelve _meses_publicacion() con caida al mes anterior.
 #
 # Lo que NO entra aca sigue siendo lo que no tiene nombre predecible: el cuadro
 # vivo del art. 15 del ICC, detras de bajarCuadroEstadistico.asp?idc=<hash>.
@@ -178,7 +184,9 @@ ARCHIVOS = {
                 "irrecuperable de las dos.",
     },
 
-    # --- Tier 4: cuadros completos del IPC, todos con URL fija de verdad --
+    # --- Tier 4: cuadros completos del IPC --------------------------------
+    # Cinco con URL fija de verdad y uno con el patron (e): sh_ipc_MM_AA.xls
+    # lleva el MES DE PUBLICACION adentro y rota todos los meses.
     "ipc_aperturas": {
         "url": "https://www.indec.gob.ar/ftp/cuadros/economia/sh_ipc_aperturas.xls",
         "ext": "xls",
@@ -204,6 +212,16 @@ ARCHIVOS = {
         "ext": "txt",
         "desc": "IPC. Metadatos de las series. Un cambio aca es un cambio de definicion: "
                 "vale tanto como el dato.",
+    },
+    "ipc_cuadros": {
+        "url": "https://www.indec.gob.ar/ftp/cuadros/economia/sh_ipc_{mes}.xls",
+        "ext": "xls",
+        "desc": "IPC. Cuadros con las series desde diciembre 2016 hasta el mes de "
+                "referencia del informe. Patron (e): el MES DE PUBLICACION va adentro "
+                "del nombre y va UN mes adelante del dato. Verificado sobre cuatro "
+                "ediciones (ene-2025 → 02_25, sep-2025 → 10_25, mar-2026 → 04_26, "
+                "jul-2026 → 08_26) leyendole el pie a los informes de prensa. "
+                "ARCHIVAR NO ES PUBLICAR: nada de esto sale a ninguna pantalla.",
     },
 
     # --- Sector externo ---------------------------------------------------
@@ -334,6 +352,17 @@ ARCHIVOS = {
         "ext": "pdf",
         "desc": "Metodologia del coeficiente de variacion salarial. Declara el rezago "
                 "de cinco meses del indice mensual construido a partir de la EPH.",
+    },
+    "salarios_cuadros": {
+        "url": "https://www.indec.gob.ar/ftp/cuadros/sociedad/variaciones_salarios_{mes}.xls",
+        "ext": "xls",
+        "desc": "Indice de salarios. Cuadros con las series historicas desde octubre "
+                "2015. Patron (e): el MES DE PUBLICACION va adentro del nombre y va "
+                "DOS meses adelante del dato. Verificado sobre doce ediciones; la de "
+                "jun-2026 apunta a variaciones_salarios_08_26.xls y lleva impreso "
+                "'Buenos Aires, 20 de agosto de 2026' dentro del propio informe. "
+                "Complementa a salarios_indice/salarios_variacion, que son los csv "
+                "de URL fija: este es el cuadro completo.",
     },
 }
 
@@ -503,19 +532,68 @@ def _dias_publicacion(hoy=None):
     return salida
 
 
+def _meses_publicacion(hoy=None):
+    """Los dos ultimos meses de publicacion mensual, como (mm, aa).
+
+    Patron (e). El nombre del archivo lleva el MES DE PUBLICACION, no el mes
+    del dato. Verificado el 7-sep-2026 leyendole el pie a los informes de
+    prensa del propio INDEC:
+
+      Indice de salarios — DOCE ediciones, el archivo va DOS meses adelante
+      del dato: dic-2022 -> 02_23, abr-2023 -> 06_23, ago-2024 -> 10_24,
+      sep-2024 -> 11_24, dic-2024 -> 02_25, abr-2025 -> 06_25,
+      sep-2025 -> 11_25, oct-2025 -> 12_25, dic-2025 -> 02_26,
+      feb-2026 -> 04_26, may-2026 -> 07_26, jun-2026 -> 08_26. La ultima
+      lleva impreso "Buenos Aires, 20 de agosto de 2026" adentro del PDF:
+      la fecha de publicacion y el nombre del archivo coinciden.
+
+      IPC — CUATRO ediciones, el archivo va UN mes adelante del dato:
+      ene-2025 -> 02_25, sep-2025 -> 10_25, mar-2026 -> 04_26,
+      jul-2026 -> 08_26.
+
+    EL REZAGO NO ENTRA EN EL RESOLVEDOR, y esa es la gracia: que salarios
+    vaya +2 y el IPC +1 da exactamente igual, porque los dos archivos
+    aparecen en el mes CORRIENTE. Una sola funcion sirve para los dos, y para
+    cualquier cuadro mensual que aparezca despues.
+
+    DOS CANDIDATOS, por el mismo motivo que el PIB y el ICA: el IPC rota
+    alrededor del 11 y salarios alrededor del 20, asi que media vida el
+    archivo del mes corriente todavia no existe y el vigente es el del mes
+    pasado. Sin el segundo candidato el modulo registraria un hueco inventado
+    quince dias de cada treinta.
+
+    Y NO SE BAJA MAS DE UN MES, a proposito. Dos candidatos ya cubren un mes
+    sin publicacion. Dos meses seguidos sin publicar es un hecho de la fuente
+    y tiene que quedar como HUECO FECHADO, no taparse con un archivo viejo.
+
+    Costo: 1 pedido por dia por archivo cuando el del mes ya salio, 2 cuando
+    todavia no. Es el patron mas barato de los cinco.
+    """
+    hoy = hoy or datetime.now(timezone.utc)
+    anio, mes = hoy.year, hoy.month
+    salida = []
+    for _ in range(2):
+        salida.append((mes, anio % 100))
+        mes -= 1
+        if mes == 0:
+            anio, mes = anio - 1, 12
+    return salida
+
+
 def urls_candidatas(url):
-    """Resuelve {anio}, {trim} o {dia} en la URL. Los candidatos, en orden.
+    """Resuelve {anio}, {trim}, {dia} o {mes} en la URL. Los candidatos, en orden.
 
     POR QUE
         Varios cuadros del INDEC llevan una fecha en el nombre:
           {anio} → sh_isac_2026.xls            (fija doce meses, rota en enero)
           {trim} → sh_oferta_demanda_06_26.xls (mes de publicacion trimestral)
           {dia}  → ica_cuadros_20_08_26.xls    (dia de publicacion mensual)
+          {mes}  → sh_ipc_08_26.xls            (mes de publicacion mensual)
         Dejar esas fechas escritas a mano significaria que el modulo empieza a
         devolver 404 hasta que alguien se acuerde de editarlo. Eso es
         mantenimiento manual, y en este proyecto lo que no es automatico no va.
 
-        En los tres casos se prueba el periodo corriente y, si no esta, el
+        En los cuatro casos se prueba el periodo corriente y, si no esta, el
         anterior. Eso cubre la ventana real entre que el periodo arranca y que
         el INDEC efectivamente publica.
 
@@ -528,6 +606,9 @@ def urls_candidatas(url):
     if "{dia}" in url:
         return [url.replace("{dia}", f"{dd:02d}_{mm:02d}_{aa:02d}")
                 for dd, mm, aa in _dias_publicacion()]
+    if "{mes}" in url:
+        return [url.replace("{mes}", f"{mm:02d}_{aa:02d}")
+                for mm, aa in _meses_publicacion()]
     if "{anio}" not in url:
         return [url]
     anio = datetime.now(timezone.utc).year
