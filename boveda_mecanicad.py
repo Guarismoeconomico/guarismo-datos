@@ -215,6 +215,25 @@ FUENTES = {
         "etiquetador": "deuda_mens_datos",
         "organismo": "Secretaria de Finanzas",
     },
+    # --- Estructura financiera de titulos publicos. Reconocida el 7-sep-2026. ---
+    #
+    # LA MISMA FALLA QUE LA DEUDA MENSUAL, EN OTRO LADO: la pagina muestra el
+    # archivo VIGENTE y nada mas. No hay historico, no hay subpagina de
+    # anteriores. Cada mes el anterior deja de estar linkeado.
+    #
+    # Y lo que se pierde es grueso: es el detalle instrumento por instrumento
+    # de cada bono y letra vigente del Estado Nacional. Una foto fechada de eso
+    # es la clase de documento que se pide en un juicio. Sin captura el dia de
+    # publicacion, la foto de este mes no existe mas.
+    #
+    # Cuatro archivos, tres formas distintas de nombrarse. Ninguno declara su
+    # periodo en la pagina: los cuatro van como "vigente".
+    "finanzas_titulos_estructura": {
+        "url": "https://www.argentina.gob.ar/economia/finanzas/estructura-financiera-de-titulos-publicos",
+        "desc": "Secretaria de Finanzas — estructura financiera de titulos publicos, cupones y coeficientes PG",
+        "etiquetador": "titulos_estructura",
+        "organismo": "Secretaria de Finanzas",
+    },
     "finanzas_deuda_mens_calendario": {
         # La pagina madre. Existe por UNA sola cosa: cuelga de aca el
         # calendario_de_publicaciones_{anio}.pdf. Se entra por la pagina y no
@@ -576,12 +595,126 @@ def etiquetar_deuda_mens_calendario(pagina, base):
     return salida
 
 
+def etiquetar_titulos_estructura(pagina, base):
+    """Un link suelto arriba + una tabla de tres filas abajo. Ninguno trae periodo.
+
+    LA PAGINA, TAL CUAL ESTA AL 7-sep-2026
+
+        <a> suelto      estructura_financiera_titulos_publicos_31-07-26.xlsx
+        <h4> Cupones, precios tecnicos y coeficientes PG
+        tabla  "Coeficientes de pago de PG - Desde enero de 2019 en adelante"
+               "Coeficientes de pago de PG - Desde enero de 2018 hasta enero de 2019"
+               "Cupones Titulos Publicos Nacionales"
+
+    POR QUE LOS CUATRO SON "vigente"
+
+        Ninguna etiqueta dice un periodo. Las dos de PG dicen una COBERTURA
+        ("desde enero de 2019 en adelante"), que no es lo mismo: describen
+        desde cuando aplica el archivo, no de que mes es el dato.
+
+        El de estructura trae 31-07-26 en el NOMBRE. Es tentador usarlo de
+        periodo y esta prohibido: la pagina se modifico el 25-ago-2026 y nadie
+        declaro si ese numero es la fecha del dato o la de publicacion. Es el
+        mismo reconocimiento pendiente que tuvo el {mes} del INDEC, donde la
+        respuesta resulto ser "mes de publicacion" y no la que parecia. La
+        fecha queda en fecha_en_el_nombre, rotulada como leida de la URL.
+
+        Con periodo "vigente" y clave estable, cada edicion nueva entra como
+        objeto nuevo con su sello: la SERIE DE OBJETOS es la serie de
+        vintages. No se pierde nada por no ponerle nombre al periodo.
+
+    LA COLISION QUE HABRIA HABIDO, y como se evita
+        Las dos filas de PG empiezan igual. Con producto = slug(etiqueta, 12)
+        las dos daban "coeficientes" y la segunda pisaba a la primera — el
+        mismo modo de falla que las dos familias de Hacienda en la 7a sesion.
+        Por eso el producto sale de los AÑOS de la etiqueta: pg2019 y
+        pg2018a2019. Si una fila de PG no trae año, no se adivina: alarma.
+
+    LO QUE NO SE ARCHIVA, SUENA
+        Cualquier fila que no sea coeficientes ni cupones, y cualquier link
+        suelto cuyo nombre no diga "estructura", cae como etiqueta sin
+        resolver. Si Finanzas agrega un archivo, lo mira un humano.
+    """
+    etiqueta, primera, salida = None, True, []
+    for tipo, a, b in eventos(pagina):
+        if tipo in ("h", "fila"):
+            # Un encabezado o una fila nueva cortan el contexto. Sin esto, un
+            # link suelto DESPUES de la tabla se quedaria con la etiqueta de
+            # la ultima fila, que es archivar un archivo con el nombre de otro.
+            etiqueta, primera = None, True
+        elif tipo == "celda":
+            if primera:
+                etiqueta, primera = b, False
+        elif tipo == "link":
+            ext = _ext_de(a)
+            if ext not in EXTENSIONES:
+                continue
+            url = _absoluta(a, base)
+            if not url:
+                continue
+            nombre = url.rsplit("/", 1)[-1].lower()
+            # LA ETIQUETA SE CONSUME, y esto lo encontro la prueba.
+            #
+            # eventos() no emite cierres: no hay evento </tr> ni </table>. Un
+            # link suelto DESPUES de la tabla se quedaba con la etiqueta de la
+            # ultima fila ("Cupones Titulos Publicos Nacionales") y, como esa
+            # etiqueta contiene "cupon", lo archivaba como cupones. Un archivo
+            # con el nombre de otro, sellado. Resetear en "h" y "fila" llega
+            # tarde, y agregarle cierres al scanner tocaria las seis fuentes.
+            #
+            # En esta pagina cada fila tiene exactamente UN link (verificado
+            # sobre las cuatro). Si algun dia una fila trae dos, el segundo cae
+            # como etiqueta sin resolver y suena la alarma: se pierde una
+            # captura, no se archiva una mentira.
+            # Se consume el ARRASTRE, no el dato: `etiq` sigue viajando al
+            # manifiesto. Borrar la etiqueta del item seria tirar la evidencia
+            # de que fue la fuente la que puso ese texto.
+            etiq, etiqueta = etiqueta, None
+            norm = (etiq or "").lower()
+            anios = re.findall(r"(?:19|20)\d{2}", norm)
+
+            if "coeficiente" in norm:
+                # El producto sale de los años de la ETIQUETA, no del nombre.
+                fam, prod = ("Coeficientes PG",
+                             "pg" + "a".join(anios)) if anios else (None, None)
+            elif "cupon" in norm or "cupón" in norm:
+                fam, prod = "Titulos publicos", "cupones"
+            elif etiq is None and "estructura" in nombre:
+                # Link suelto: dos señales. Sin etiqueta Y el nombre lo dice.
+                fam, prod = "Titulos publicos", "estructura"
+            else:
+                fam, prod = None, None
+
+            it = {
+                "familia": fam or "(sin familia)",
+                "producto": prod or "archivo",
+                "etiqueta": etiq,
+                "anio": None,
+                "orden": None,
+                "periodo": None,
+                "periodo_incierto": True,
+                "url": url,
+                "ext": ext,
+            }
+            if fam:
+                it.update(periodo="vigente", periodo_incierto=False,
+                          orden=1, anio=0)
+                m = re.search(r"(\d{2}-\d{2}-\d{2,4})", nombre)
+                if m:
+                    it["fecha_en_el_nombre"] = m.group(1)
+            if _roto(a):
+                it["href_roto_en_la_fuente"] = True
+            salida.append(it)
+    return salida
+
+
 ETIQUETADORES = {
     "hacienda": etiquetar_hacienda,
     "finanzas": etiquetar_finanzas,
     "deuda_mens_informes": etiquetar_deuda_mens_informes,
     "deuda_mens_datos": etiquetar_deuda_mens_datos,
     "deuda_mens_calendario": etiquetar_deuda_mens_calendario,
+    "titulos_estructura": etiquetar_titulos_estructura,
 }
 
 
@@ -911,7 +1044,7 @@ def main(argv=None):
                 #
                 # Son hechos de la fuente, que es literalmente el producto.
                 for extra in ("href_roto_en_la_fuente", "etiqueta_corregida",
-                              "anio_en_el_nombre"):
+                              "anio_en_el_nombre", "fecha_en_el_nombre"):
                     if extra in it:
                         entrada[extra] = it[extra]
                 if ufin and ufin != it["url"]:
