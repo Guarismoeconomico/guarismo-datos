@@ -427,7 +427,11 @@ def _a_https_mismo_host(url, base):
 
     Si el host fuera OTRO no se toca: eso no es una errata de tipeo, es un
     link a un tercero, y subirle el esquema seria inventar una URL. En ese
-    caso queda como esta y, si no baja, es un hueco fechado con su motivo.
+    caso queda como esta y muere en el candado de bajar() -> _exigir_https(),
+    que lo deja como hueco fechado con el motivo escrito.
+
+    Las dos piezas son hermanas y hacen falta las dos: esta CORRIGE y deja
+    constancia; aquella PROHIBE y no corrige nada.
     """
     if not (url or "").lower().startswith("http://"):
         return url, False
@@ -984,6 +988,45 @@ class NoEsta(Exception):
     """El archivo no esta en esa URL. No tiene sentido reintentar."""
 
 
+class CanalInseguro(Exception):
+    """Se pidio sellar algo por un canal no autenticado. No se reintenta."""
+
+
+def _exigir_https(url, donde):
+    """La boveda NUNCA sella por un canal no autenticado. Decision firme.
+
+    POR QUE ACA Y NO EN _absoluta()
+        _absoluta() arma URLs; este modulo SELLA. La regla es sobre el canal,
+        asi que vive en el unico punto por el que pasan las siete fuentes.
+        Puesta en el armador seria saltéable: cualquier etiquetador futuro que
+        devuelva una URL sin pasar por ahi se la saltea sin querer.
+
+    POR QUE NO CORRIGE
+        Corregir es tarea del etiquetador, que es el unico que puede dejar el
+        hecho escrito en el item (esquema_corregido_por_guarismo). Si _bajar_
+        subiera el esquema en silencio, la boveda archivaria una URL que la
+        fuente nunca publico, sin constancia. Aca solo se dice que no.
+
+        Consecuencia buscada: un http:// a OTRO host, que el etiquetador no
+        toca a proposito, muere aca y queda HUECO FECHADO CON EL MOTIVO. Que
+        es exactamente lo que tiene que pasar.
+
+    ESTADO AL 7-sep-2026 (contado, no recordado)
+        Las siete paginas de FUENTES son https. Y sobre las tres grandes
+        —Hacienda 117 links, deuda trimestral vigente 87, informes mensuales
+        55— la busqueda de "http://www.argentina.gob.ar" en el HTML dio CERO
+        en las tres. El unico caso del modulo era el de Datos Anteriores, uno
+        entre 102, y lo corrige su etiquetador antes de llegar hasta aca.
+
+        O sea: hoy este candado no deberia dispararse nunca. Va igual. Una
+        regla que solo se cumple porque nadie la probo no es una regla.
+    """
+    if not (url or "").lower().startswith("https://"):
+        raise CanalInseguro(
+            f"{donde} en canal no autenticado: {url!r}. La boveda no sella por "
+            f"HTTP plano — queda hueco fechado, no se baja.")
+
+
 def _es_html(datos, headers):
     if "html" in (headers.get("Content-Type") or "").lower():
         return True
@@ -998,11 +1041,30 @@ def bajar(url, ext="bin"):
 
     Misma guarda que el modulo del INDEC: una pagina HTML donde esperabamos un
     archivo se trata IGUAL que un 404. Un 200 no prueba nada.
+
+    Y la guarda de canal: nada que no sea https se baja, ni al pedir ni
+    despues de las redirecciones. Ver _exigir_https().
     """
+    # Antes del primer byte y FUERA del bucle: un esquema mal no se reintenta,
+    # igual que un 404. Reintentar tres veces algo que esta prohibido solo
+    # ensucia el log y demora la corrida.
+    _exigir_https(url, "URL pedida")
+
     ultimo = None
     for intento in range(REINTENTOS):
         try:
             r = requests.get(url, headers=UA, timeout=TIMEOUT)
+
+            # LA CADENA ENTERA, NO SOLO EL DESTINO.
+            #   requests sigue las redirecciones solo. Un https que rebota por
+            #   http y vuelve a https termina con r.url en https, y los bytes
+            #   igual viajaron sin autenticar en el medio. Se mira cada salto.
+            #   Ya paso una vez en este modulo que una URL anotada redirigiera
+            #   a otra (.../datos-mensuales-de-la-deuda/datos), asi que las
+            #   redirecciones aca son la norma, no la excepcion.
+            for salto in list(r.history) + [r]:
+                _exigir_https(getattr(salto, "url", None), "salto de redireccion")
+
             if r.status_code == 404:
                 raise NoEsta(f"404 — no existe {url}")
             r.raise_for_status()
@@ -1013,7 +1075,7 @@ def bajar(url, ext="bin"):
                     f"el servidor devolvio una pagina HTML de {len(r.content)} "
                     f"bytes en vez de un .{ext}. El archivo no esta publicado.")
             return r.content, dict(r.headers), r.url
-        except NoEsta:
+        except (NoEsta, CanalInseguro):
             raise
         except Exception as e:
             ultimo = e
