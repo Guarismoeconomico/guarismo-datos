@@ -1,0 +1,27 @@
+name: Sonda Comtrade (reconocimiento)
+
+# DESCARTABLE. Este workflow existe solo para correr la sonda de
+# reconocimiento de la API de Comtrade. No escribe en R2 ni en Supabase.
+# Se borra junto con sonda_comtrade.py cuando el modulo real este cableado.
+#
+# Sin schedule: se dispara a mano y nada mas.
+
+on:
+  workflow_dispatch:
+
+jobs:
+  sonda:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - run: pip install requests
+
+      - name: Sondear la API de Comtrade
+        env:
+          COMTRADE_KEY: ${{ secrets.COMTRADE_KEY }}
+        run: python sonda_comtrade.py
