@@ -1,0 +1,24 @@
+name: Sonda Comtrade 2 (diagnostico)
+
+# DESCARTABLE, igual que la primera. Solo lectura: no escribe en R2 ni en
+# Supabase. Se borra junto con sonda_comtrade2.py cuando cierre el diagnostico.
+
+on:
+  workflow_dispatch:
+
+jobs:
+  sonda2:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - run: pip install requests
+
+      - name: Diagnosticar Comtrade
+        env:
+          COMTRADE_KEY: ${{ secrets.COMTRADE_KEY }}
+        run: python sonda_comtrade2.py
