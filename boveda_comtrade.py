@@ -223,9 +223,21 @@ def _hoy():
 
 
 def capturar_alarma():
-    """getDa por reporter y frecuencia. Devuelve (datasets, huecos)."""
+    """getDa por reporter y frecuencia.
+
+    Devuelve (datasets, huecos, celdas). `celdas` es la grilla COMPLETA
+    reporter x frecuencia con el resultado de cada una, incluidas las que
+    devolvieron cero.
+
+    POR QUE LA GRILLA Y NO SOLO EL TOTAL
+      Un reporter que responde 200 con lista vacia NO es un hueco: la llamada
+      salio bien. Pero tampoco es normal, y hoy se suma al total y desaparece.
+      Si Argentina pasa de 200 datasets a 0, el total baja y nadie sabe cual
+      se cayo. Un manifiesto tiene que contar lo que OMITIO.
+    """
     datasets = []
     huecos = []
+    celdas = []
     hoy = _hoy()
 
     for cod, nombre in REPORTERS.items():
@@ -243,15 +255,23 @@ def capturar_alarma():
                 print(f"[comtrade] HUECO — {etiqueta}: {e}")
                 huecos.append({"reporter": cod, "nombre": nombre,
                                "freq": freq, "error": str(e)})
+                celdas.append({"reporter": cod, "nombre": nombre, "freq": freq,
+                               "datasets": None, "resultado": "error",
+                               "error": str(e)})
                 continue
 
             filas = res.get("data") or []
             for f in filas:
                 f["_reporterNombre"] = nombre
                 datasets.append(f)
-            print(f"[comtrade] {etiqueta:18s} {len(filas):5d} datasets")
+            celdas.append({"reporter": cod, "nombre": nombre, "freq": freq,
+                           "datasets": len(filas),
+                           "resultado": "ok" if filas else "cero",
+                           "error": None})
+            print(f"[comtrade] {etiqueta:18s} {len(filas):5d} datasets"
+                  + ("   <- CERO" if not filas else ""))
 
-    return datasets, huecos
+    return datasets, huecos, celdas
 
 
 def capturar_liveupdate():
@@ -267,6 +287,38 @@ def capturar_liveupdate():
     filas = res.get("data") or []
     print(f"[comtrade] getLiveUpdate      {len(filas):5d} publicaciones recientes")
     return filas, None
+
+
+# ----------------------------------------------------------------------------
+# El cero y el guion gritan
+# ----------------------------------------------------------------------------
+
+def gritar_ceros(celdas):
+    """Separa la grilla en las que dieron cero y las que fallaron.
+
+    NO rompe la corrida: un cero puede ser legitimo (un reporter puede no
+    tener datasets en esta clasificacion). Pero tiene que VERSE, en el log y
+    en el manifiesto, o es indistinguible de una caida silenciosa.
+    """
+    en_cero = [c for c in celdas if c["resultado"] == "cero"]
+    con_error = [c for c in celdas if c["resultado"] == "error"]
+
+    for c in con_error:
+        print(f"[comtrade] !! SIN RESPUESTA  {c['nombre']}/{c['freq']} — "
+              f"{c['error']}")
+    for c in en_cero:
+        print(f"[comtrade] !! CERO DATASETS  {c['nombre']}/{c['freq']} — "
+              f"la llamada salio bien y la fuente no devolvio nada")
+
+    if not en_cero and not con_error:
+        print(f"[comtrade] grilla completa: {len(celdas)}/{len(celdas)} "
+              f"celdas con datos")
+    else:
+        print(f"[comtrade] grilla: {len(celdas) - len(en_cero) - len(con_error)}"
+              f"/{len(celdas)} con datos · {len(en_cero)} en cero · "
+              f"{len(con_error)} con error")
+
+    return {"celdas": celdas, "en_cero": en_cero, "con_error": con_error}
 
 
 # ----------------------------------------------------------------------------
@@ -320,7 +372,7 @@ def evaluar(datasets, estado):
 # Empaquetado
 # ----------------------------------------------------------------------------
 
-def empaquetar(datasets, live, huecos, codigos, conteo):
+def empaquetar(datasets, live, huecos, codigos, conteo, grilla):
     ahora = datetime.now(timezone.utc)
     manifiesto = {
         "_tipo": "manifiesto",
@@ -339,6 +391,9 @@ def empaquetar(datasets, live, huecos, codigos, conteo):
         "nuevos": conteo["NUEVO"],
         "sin_cambios": conteo["igual"],
         "huecos": huecos,
+        "grilla_celdas": grilla["celdas"],
+        "reporters_en_cero": grilla["en_cero"],
+        "reporters_con_error": grilla["con_error"],
         "liveupdate_registros": len(live) if live is not None else None,
         "llamadas_gastadas": _llamadas,
         "presupuesto": MAX_LLAMADAS,
@@ -386,13 +441,41 @@ def _cliente():
     )
 
 
+# Los unicos codigos que significan "todavia no existe", que es CORRECTO en
+# la primera corrida. Cualquier otra cosa significa "no pude leer".
+NO_EXISTE = ("NoSuchKey", "NoSuchBucket", "404", "NotFound")
+
+
 def leer_estado(s3, bucket):
+    """Lee el estado. Distingue "no existe" de "no puedo leer".
+
+    POR QUE ESTO ABORTA LA CORRIDA
+      Un `except Exception: return {}` trata igual NoSuchKey (primera corrida,
+      correcto) y AccessDenied (no tengo permiso). El segundo caso haria decir
+      "sin estado previo", marcar TODOS los datasets como PRIMERA y despues
+      PISAR el estado bueno con uno reconstruido a ciegas.
+
+      Y en este modulo duele el doble: `0 primera` es justamente la prueba de
+      que el estado se leyo. Mejor un workflow en rojo que un archivo que
+      miente en verde.
+    """
     try:
         obj = s3.get_object(Bucket=bucket, Key=ESTADO)
         return json.loads(obj["Body"].read().decode("utf-8"))
     except Exception as e:
-        print(f"[comtrade] sin estado previo ({type(e).__name__}) — todo cuenta como PRIMERA")
-        return {}
+        codigo = type(e).__name__
+        try:
+            codigo = e.response["Error"]["Code"]          # botocore ClientError
+        except Exception:
+            pass
+        if codigo in NO_EXISTE or type(e).__name__ in NO_EXISTE:
+            print(f"[comtrade] sin estado previo ({codigo}) — todo cuenta como PRIMERA")
+            return {}
+        raise RuntimeError(
+            f"no se pudo LEER el estado ({codigo}). La credencial responde pero "
+            f"no entrega {ESTADO}. Se aborta a proposito: seguir marcaria todo "
+            f"como PRIMERA y pisaria el estado bueno."
+        ) from e
 
 
 def subir(s3, bucket, datos, sha, manifiesto, nuevo_estado):
@@ -410,6 +493,7 @@ def subir(s3, bucket, datos, sha, manifiesto, nuevo_estado):
             "datasets": str(manifiesto["datasets_total"]),
             "nuevos": str(manifiesto["nuevos"]),
             "huecos": str(len(manifiesto["huecos"])),
+            "en-cero": str(len(manifiesto["reporters_en_cero"])),
             "capturado-utc": manifiesto["capturado_utc"],
         },
     )
@@ -457,7 +541,7 @@ def main():
             print(f"[comtrade] seco sin estado ({type(e).__name__}) — todo dira PRIMERA")
 
     codigos = verificar_codigos()
-    datasets, huecos = capturar_alarma()
+    datasets, huecos, celdas = capturar_alarma()
     live, hueco_live = capturar_liveupdate()
     if hueco_live:
         huecos.append(hueco_live)
@@ -475,7 +559,9 @@ def main():
                   f"{d.get('period')}  {d['_motivo']}  "
                   f"first={d.get('firstReleased')} last={d.get('lastReleased')}")
 
-    datos, sha, manifiesto = empaquetar(datasets, live, huecos, codigos, conteo)
+    grilla = gritar_ceros(celdas)
+    datos, sha, manifiesto = empaquetar(datasets, live, huecos, codigos,
+                                        conteo, grilla)
 
     print(f"[comtrade] {len(datasets)} datasets · {conteo['PRIMERA']} primera · "
           f"{conteo['NUEVO']} nuevos · {conteo['igual']} sin cambios · "
