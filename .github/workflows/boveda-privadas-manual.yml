@@ -1,0 +1,62 @@
+name: Guarismo boveda privadas BCR (manual)
+
+# Mecanica F: fuentes privadas -> bucket guarismo-reservado.
+#
+# MANUAL mientras el modulo se estrena. Sin schedule: el reloj vive afuera
+# (cron-job.org) y este modulo todavia no entro a la corrida diaria.
+#
+# Se estrena en SECO. El modo lo elegis en el desplegable de "Run workflow".
+# OJO: "Re-run jobs" repite los inputs ORIGINALES y nunca los vuelve a pedir.
+# Para cambiar de modo hay que lanzar una corrida nueva desde el desplegable.
+#
+# POR QUE ACA NO ESTAN R2_ACCESS_KEY_ID / R2_SECRET_ACCESS_KEY
+#   A proposito. La separacion entre lo publicable y lo reservado es de
+#   CREDENCIAL, no de convencion: el proceso que captura fuentes privadas no
+#   tiene en su entorno las llaves de guarismo-crudo, ni para leerlas de
+#   casualidad. Si algun dia este workflow necesita el bucket publico, eso es
+#   una decision explicita, no un descuido de copiar y pegar.
+#
+# POR QUE python 3.12 Y NO 3.11
+#   Porque 3.12 es la version de la corrida diaria, que es donde este modulo
+#   va a terminar viviendo. Estrenar en una version y correr en otra es la
+#   deuda tecnica que ya quedo anotada con Comtrade; no se repite.
+
+on:
+  workflow_dispatch:
+    inputs:
+      modo:
+        description: "modo de corrida"
+        required: true
+        default: "seco"
+        type: choice
+        options:
+          - seco
+          - normal
+          - backfill
+
+jobs:
+  privadas:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - run: pip install requests boto3
+
+      - name: Capturar BCR/GEA hacia el almacen reservado
+        env:
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+          R2_RESERVADO_ACCESS_KEY_ID: ${{ secrets.R2_RESERVADO_ACCESS_KEY_ID }}
+          R2_RESERVADO_SECRET_ACCESS_KEY: ${{ secrets.R2_RESERVADO_SECRET_ACCESS_KEY }}
+        run: |
+          case "${{ inputs.modo }}" in
+            seco)     ARGS="--seco" ;;
+            normal)   ARGS="" ;;
+            backfill) ARGS="--backfill" ;;
+            *) echo "modo desconocido: ${{ inputs.modo }}"; exit 2 ;;
+          esac
+          echo "modo=${{ inputs.modo }} args='$ARGS'"
+          python boveda_privadas.py $ARGS
