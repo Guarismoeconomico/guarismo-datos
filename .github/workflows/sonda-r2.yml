@@ -1,0 +1,30 @@
+name: Sonda R2 reservado (DESCARTABLE)
+
+# DESCARTABLE. Se borra junto con sonda_r2.py cuando cierre el diagnostico
+# del AccessDenied del 8-sep-2026. Sin schedule, sin inputs.
+#
+# No expone R2_ACCESS_KEY_ID ni R2_SECRET_ACCESS_KEY a proposito: la sonda
+# averigua si las credenciales RESERVADAS alcanzan guarismo-crudo, y para eso
+# no necesita —ni debe— tener las del bucket publico a mano.
+
+on:
+  workflow_dispatch:
+
+jobs:
+  sonda:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - run: pip install boto3
+
+      - name: Sondear R2
+        env:
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+          R2_RESERVADO_ACCESS_KEY_ID: ${{ secrets.R2_RESERVADO_ACCESS_KEY_ID }}
+          R2_RESERVADO_SECRET_ACCESS_KEY: ${{ secrets.R2_RESERVADO_SECRET_ACCESS_KEY }}
+        run: python sonda_r2.py
