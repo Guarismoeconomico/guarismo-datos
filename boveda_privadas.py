@@ -355,11 +355,42 @@ def _cliente():
 
 
 def leer_estado(s3, bucket):
+    """Estado previo. {} SOLO si el objeto todavia no existe.
+
+    POR QUE NO ALCANZA UN except Exception: return {}
+        Asi estaba escrito y trataba igual dos cosas que no se parecen:
+
+          NoSuchKey     -> primera corrida. {} es la respuesta correcta.
+          AccessDenied  -> no tengo permiso para LEER el estado.
+
+        En el segundo caso, devolver {} hace que el modulo diga "sin estado
+        previo", re-archive todo como PRIMERA y despues PISE el estado bueno
+        con uno reconstruido a ciegas. Un error de credenciales terminaria
+        en un log que se ve perfecto.
+
+        Paso el 8-sep-2026: con el token inactivo, el log dijo "sin estado
+        previo — todo lo que se vea sera PRIMERA" sin que eso fuera cierto.
+        Un cero sin motivo escrito es indistinguible de un bug.
+
+    Por eso cualquier error que NO sea "todavia no existe" ROMPE la corrida.
+    Es preferible un workflow en rojo a un archivo reconstruido de prepo.
+    """
+    from botocore.exceptions import ClientError
     try:
         obj = s3.get_object(Bucket=bucket, Key=ESTADO)
         return json.loads(obj["Body"].read().decode("utf-8"))
-    except Exception:
-        return {}
+    except ClientError as e:
+        cod = (e.response.get("Error") or {}).get("Code")
+        if cod in ("NoSuchKey", "404", "NotFound"):
+            return {}
+        raise RuntimeError(
+            f"no se pudo LEER {ESTADO} en {bucket}: {cod}. No es que no "
+            f"exista: no se pudo leer. La corrida se detiene para no "
+            f"reconstruir el estado a ciegas.") from e
+    except json.JSONDecodeError as e:
+        raise RuntimeError(
+            f"{ESTADO} existe pero no es JSON valido: {e}. Se detiene: "
+            f"seguir significaria pisarlo con uno nuevo.") from e
 
 
 def escribir_estado(s3, bucket, estado):
@@ -386,13 +417,27 @@ def url_pagina(n):
 
 
 def recorrer(paginas, log):
-    """Lee el listado. Devuelve (items, paginas_crudas, omitidas).
+    """Lee el listado. Devuelve (items, paginas_crudas, omitidas, repetidos).
 
     Nunca corta por un total declarado por la fuente: corta porque el pager
     dejo de ofrecer una pagina posterior, o por el tope duro.
+
+    POR QUE SE CUENTAN LOS REPETIDOS
+        El backfill del 8-sep-2026 leyo 205 posiciones (34 paginas de 6 + 1)
+        y quedaron 199 informes unicos: SEIS entradas repetidas que este
+        bucle salteaba en silencio. Se verifico que no hubo perdida —cero
+        meses faltantes en los 80 de 2020-2026— pero el modulo no lo decia.
+
+        Un manifiesto tiene que contar lo que OMITIO. Si manana el listado
+        devolviera la misma entrada doscientas veces, el log de antes habria
+        dicho "199 informes" con la misma tranquilidad de siempre.
+
+        Hipotesis NO verificada de por que se repiten: la paginacion de
+        Drupal reordenando entre requests cuando hay empates de fecha. Con
+        este registro, el proximo backfill dice en que pagina paso.
     """
-    items, crudas, omitidas = [], {}, []
-    vistos = set()
+    items, crudas, omitidas, repetidos = [], {}, [], []
+    vistos = {}
     n = 0
     while n < min(paginas, TOPE_PAGINAS):
         url = url_pagina(n)
@@ -411,17 +456,23 @@ def recorrer(paginas, log):
                              "motivo": "cero entradas parseadas"})
             log(f"  [pagina {n}] CERO entradas — el listado cambio de forma")
             break
+        rep_aca = 0
         for it in nuevas:
             if it["slug"] in vistos:
+                repetidos.append({"slug": it["slug"], "pagina": n,
+                                  "visto_antes_en_pagina": vistos[it["slug"]],
+                                  "fecha": it["fecha"]})
+                rep_aca += 1
                 continue
-            vistos.add(it["slug"])
+            vistos[it["slug"]] = n
             items.append(it)
-        log(f"  [pagina {n}] {len(nuevas)} entradas")
+        log(f"  [pagina {n}] {len(nuevas)} entradas"
+            + (f" · {rep_aca} REPETIDA(S)" if rep_aca else ""))
         if not hay_siguiente(pagina, n):
             break
         n += 1
         time.sleep(PAUSA)
-    return items, crudas, omitidas
+    return items, crudas, omitidas, repetidos
 
 
 def clave_objeto(fecha, slug, que, ext):
@@ -468,8 +519,10 @@ def main(argv=None):
     # el estado": si miente, la alarma miente.
     habia_estado = bool(conocidos)
 
-    items, crudas, omitidas = recorrer(paginas, log)
-    log(f"  {len(items)} informe(s) en el listado")
+    items, crudas, omitidas, repetidos = recorrer(paginas, log)
+    log(f"  {len(items)} informe(s) en el listado"
+        + (f" · {len(repetidos)} entrada(s) repetida(s) en el listado"
+           if repetidos else ""))
 
     primeras, nuevos, editados, huecos = [], [], [], []
     manifiesto_items = []
@@ -585,6 +638,7 @@ def main(argv=None):
         "seco": a.seco,
         "paginas_leidas": sorted(crudas.keys()),
         "paginas_omitidas": omitidas,
+        "repetidos_en_listado": repetidos,
         "informes_vistos": len(items),
         "primeras": primeras, "nuevos": nuevos,
         "editados": editados,
@@ -605,7 +659,8 @@ def main(argv=None):
 
     log(f"[privadas] {len(items)} informes · {len(primeras)} primera · "
         f"{len(nuevos)} nuevos · {len(editados)} editados · "
-        f"{len(huecos)} huecos · {len(omitidas)} paginas omitidas")
+        f"{len(huecos)} huecos · {len(omitidas)} paginas omitidas · "
+        f"{len(repetidos)} repetidos")
 
     # Siempre 0: un hueco aislado NO es una emergencia y no debe tumbar la
     # corrida diaria — queda fechado en el manifiesto, que es su lugar. Lo que
