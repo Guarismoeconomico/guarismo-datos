@@ -1,0 +1,45 @@
+name: Guarismo boveda Comtrade (manual)
+
+# Manual mientras el modulo se estrena. Sin schedule: el reloj vive afuera
+# (cron-job.org) y este modulo todavia no entro a la corrida diaria.
+#
+# Se estrena en SECO. El modo lo elegis en el desplegable de "Run workflow".
+
+on:
+  workflow_dispatch:
+    inputs:
+      modo:
+        description: "modo de corrida"
+        required: true
+        default: "seco"
+        type: choice
+        options:
+          - seco
+          - normal
+
+jobs:
+  comtrade:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - run: pip install requests boto3
+
+      - name: Capturar la alarma de Comtrade
+        env:
+          COMTRADE_KEY: ${{ secrets.COMTRADE_KEY }}
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+        run: |
+          if [ "${{ inputs.modo }}" = "seco" ]; then
+            ARGS="--seco"
+          else
+            ARGS=""
+          fi
+          echo "modo=${{ inputs.modo }} args='$ARGS'"
+          python boveda_comtrade.py $ARGS
