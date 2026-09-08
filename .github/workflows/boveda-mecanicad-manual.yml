@@ -16,8 +16,10 @@ name: Guarismo boveda mecanica D (manual)
 # ORDEN DE USO — de menos a mas irreversible
 #   1. modo=seco      → baja, hashea e informa. NO escribe un byte en R2.
 #                       Se lee el log y se confirma que dice lo esperado.
-#   2. modo=normal    → captura las 2 ediciones mas nuevas por familia.
-#                       Deberian ser 12 objetos: 2 paginas + 10 archivos.
+#   2. modo=normal    → captura las 2 ediciones mas nuevas por familia, en
+#                       las 7 fuentes. En regimen da "26 OK · 0 nuevos" y
+#                       escribe CERO bytes: solo escribe el dia que el
+#                       organismo publica.
 #   3. (recien ahi)   → agregar el paso a boveda-diaria.yml.
 #   4. modo=backfill  → una sola vez, mirando el panel de R2.
 #
@@ -45,14 +47,10 @@ on:
           - normal
           - backfill
       fuente:
-        description: "Limitar a una fuente (vacio = las dos)"
+        description: "Fuente(s) separadas por coma. VACIO = las 7. Validas: finanzas_deuda_mens_calendario, finanzas_deuda_mens_datos, finanzas_deuda_mens_informes, finanzas_deuda_trim, finanzas_deuda_trim_ant, finanzas_titulos_estructura, hacienda_fiscal"
         required: false
         default: ""
-        type: choice
-        options:
-          - ""
-          - hacienda_fiscal
-          - finanzas_deuda_trim
+        type: string
 
 jobs:
   mecanicad:
