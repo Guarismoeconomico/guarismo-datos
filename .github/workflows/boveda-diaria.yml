@@ -1,7 +1,7 @@
 name: Guarismo boveda diaria
 
 # Corre TODOS los modulos de boveda de cadencia diaria en secuencia, con un
-# solo reloj. Son CUATRO: datos.gob.ar, INDEC, BCRA y mecanica D.
+# solo reloj. Son CINCO: datos.gob.ar, INDEC, BCRA, mecanica D y Comtrade.
 #
 # Por que agrupado por CADENCIA y no por fuente: un workflow por modulo son
 # doce relojes en dos meses, y el dia que se regenere el PAT hay que tocarlos
@@ -106,3 +106,35 @@ jobs:
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           R2_BUCKET: guarismo-crudo
         run: python boveda_mecanicad.py
+
+      # Comtrade: capa de ALARMA de UN Comtrade (mecanica E, API con token).
+      #
+      # POR QUE ENTRA AL DIARIO
+      #   La ONU declara por escrito que mantiene UNA SOLA VERSION de cada
+      #   dataset: cuando un pais corrige lo que declaro, la version corregida
+      #   REEMPLAZA a la anterior y no queda archivo de la previa.
+      #
+      #   getDa entrega solo firstReleased y lastReleased. Si un dataset se
+      #   reviso cinco veces, las tres del medio NO EXISTEN en la respuesta de
+      #   hoy: las tapo el ultimo lastReleased. Mirando todos los dias, cada
+      #   revision queda fechada por nosotros. Con cualquier otra cadencia, las
+      #   intermedias se pierden para siempre.
+      #
+      # QUE CUESTA EN REGIMEN
+      #   14 llamadas a la API (presupuesto propio de 20: la fuente NO declara
+      #   su cuota en ningun header, medido el 8-sep-2026) y ~43 KB por dia.
+      #
+      # NO BAJA EL DATO ESPEJO. Esta es la capa de alarma. La capa 2 va
+      # gatillada por esta, igual que la mecanica D baja archivos cuando la
+      # pagina cambia.
+      #
+      # SIN RELOJ PROPIO: entra a este workflow. Cero cronjobs nuevos.
+      - name: Capturar alarma de Comtrade a R2
+        if: always()          # corre aunque los modulos anteriores hayan fallado
+        env:
+          COMTRADE_KEY: ${{ secrets.COMTRADE_KEY }}
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET: guarismo-crudo
+        run: python boveda_comtrade.py
