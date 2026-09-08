@@ -36,7 +36,7 @@ import requests
 BASE = "https://comtradeapi.un.org"
 TIMEOUT = 90
 PAUSA = 1.5
-MAX_LLAMADAS = 16
+MAX_LLAMADAS = 48
 DESDE = "2000-01-01"
 
 REPORTERS = {
@@ -143,40 +143,120 @@ def auditar_filtro():
 # B. INDIA
 # ---------------------------------------------------------------------------
 
+CLASIFICACIONES = ["HS", "H0", "H1", "H2", "H3", "H4", "H5", "H6",
+                   "S1", "S2", "S3", "S4"]
+
+CONTROL = [("356", "India"), ("76", "Brasil")]
+
+
 def diagnosticar_india():
-    _titulo("B. EL CERO DE INDIA — tres hipotesis, tres llamadas")
+    """Matriz clasificacion x pais. Brasil es el CONTROL.
 
-    pruebas = [
-        ("HS mensual, CON filtro (lo que hace el modulo)", "M", "HS", True),
-        ("HS mensual, SIN filtro", "M", "HS", False),
-        ("HS anual, SIN filtro", "A", "HS", False),
-        ("SITC mensual, SIN filtro", "M", "SITC", False),
-    ]
-    resultados = {}
-    for etiqueta, freq, cl, con_fecha in pruebas:
-        filas, err = getda("356", freq, cl, con_fecha)
-        if err:
-            _p(f"[sonda2] {etiqueta:45s} ERROR: {err}")
-            resultados[etiqueta] = None
-            continue
-        resultados[etiqueta] = len(filas)
-        _p(f"[sonda2] {etiqueta:45s} {len(filas):5d} datasets")
-        if filas:
-            d = filas[0]
-            _p(f"[sonda2]     ejemplo: periodo={d.get('period')} "
-               f"cl={d.get('classificationCode')} "
-               f"first={d.get('firstReleased')} last={d.get('lastReleased')}")
+    POR QUE UNA MATRIZ Y NO UNA LISTA
+      Barrer India sola no alcanza: una fila de ceros no distingue "India no
+      reporta" de "la API no sirve ese codigo a NADIE". Sin control, el cero
+      es ambiguo. Es el mismo problema que reporters_en_cero.
 
+    POR QUE FALLO SITC EN LA CORRIDA ANTERIOR
+      Porque "SITC" es el nombre de la FAMILIA, no un codigo. La ruta
+      /data/v1/getDa/C/{freq}/{cl} espera el codigo de la revision concreta:
+      H0..H6 para HS, S1..S4 para SITC.
+
+    SIN filtro de fecha a proposito: es el escenario mas permisivo. Si algo
+    existe, con esto aparece.
+    """
+    _titulo("B. EL CERO DE INDIA — matriz de clasificaciones, con control")
+    _p(f"{len(CLASIFICACIONES)} codigos x {len(CONTROL)} paises = "
+       f"{len(CLASIFICACIONES) * len(CONTROL)} llamadas, mensual, sin filtro.")
     _p()
-    vals = [v for v in resultados.values() if v is not None]
-    if vals and max(vals) == 0:
-        _p("[sonda2] VEREDICTO: hipotesis C — India no tiene datasets en ninguna")
-        _p("[sonda2]            de las formas probadas. No es un bug nuestro.")
-    elif resultados.get("HS mensual, SIN filtro"):
-        _p("[sonda2] VEREDICTO: hipotesis B — el FILTRO DE FECHA los borraba.")
-        _p("[sonda2]            Es un bug del modulo y afecta a todos los paises.")
+    _p(f"{'codigo':8s} {'India':>10s} {'Brasil':>10s}   que declaran los datasets")
+    _p("-" * 74)
+
+    matriz = {}
+    for cl in CLASIFICACIONES:
+        fila = {}
+        for cod, nombre in CONTROL:
+            filas, err = getda(cod, "M", cl, con_fecha=False)
+            fila[nombre] = ("error", err) if err else ("ok", filas)
+        matriz[cl] = fila
+
+        def celda(nombre):
+            estado, v = fila[nombre]
+            if estado == "error":
+                return "AGOTADO" if "presupuesto" in str(v) else "ERROR"
+            return str(len(v))
+
+        # Que classificationCode se declaran a si mismos los que SI vienen.
+        # Es gratis: ya esta en los datos que pedimos igual.
+        nota = ""
+        for nombre in ("Brasil", "India"):
+            estado, v = fila[nombre]
+            if estado == "ok" and v:
+                declara = sorted({str(d.get("classificationCode")) for d in v})
+                nota = f"{nombre}: {','.join(declara[:4])}"
+                break
+        if not nota:
+            estado, v = fila["Brasil"]
+            if estado == "error":
+                nota = str(v)[:44]
+
+        _p(f"{cl:8s} {celda('India'):>10s} {celda('Brasil'):>10s}   {nota}")
+
+    # -----------------------------------------------------------------------
+    # Veredicto. NO se canta si alguna prueba fallo.
+    # -----------------------------------------------------------------------
+    _p()
+    fallidas = [(cl, n, v) for cl, f in matriz.items()
+                for n, (e, v) in f.items() if e == "error"]
+    agotado = [x for x in fallidas if "presupuesto" in str(x[2])]
+
+    if agotado:
+        _p(f"[sonda2] VEREDICTO: INCONCLUSO — se agoto el presupuesto en "
+           f"{len(agotado)} celda(s).")
+        _p("[sonda2]            Subir MAX_LLAMADAS y repetir. El presupuesto")
+        _p("[sonda2]            agotado NO es un cero de la fuente.")
+        return
+    if fallidas:
+        _p(f"[sonda2] VEREDICTO: INCONCLUSO — {len(fallidas)} celda(s) con error "
+           f"de la API:")
+        for cl, n, v in fallidas[:6]:
+            _p(f"[sonda2]            {cl}/{n}: {str(v)[:70]}")
+        return
+
+    def total(nombre):
+        return sum(len(v) for f in matriz.values()
+                   for n, (e, v) in f.items() if n == nombre and e == "ok")
+
+    india, brasil = total("India"), total("Brasil")
+    india_cl = [cl for cl, f in matriz.items() if f["India"][1]]
+    brasil_cl = [cl for cl, f in matriz.items() if f["Brasil"][1]]
+
+    _p(f"[sonda2] India responde en: {india_cl or 'NINGUNA'}  ({india} datasets)")
+    _p(f"[sonda2] Brasil responde en: {brasil_cl or 'NINGUNA'}  ({brasil} datasets)")
+    _p()
+
+    if not brasil_cl:
+        _p("[sonda2] VEREDICTO: INCONCLUSO — el CONTROL tampoco responde.")
+        _p("[sonda2]            Brasil dio datos esta manana bajo HS, asi que")
+        _p("[sonda2]            esto apunta a la ruta o a la clave, no a India.")
+    elif not india_cl:
+        _p("[sonda2] VEREDICTO: hipotesis C — India NO reporta en ninguna de las")
+        _p("[sonda2]            12 clasificaciones, mientras el control si.")
+        _p("[sonda2]            No es un bug nuestro: es un hecho de la fuente,")
+        _p("[sonda2]            y se archiva como tal en reporters_en_cero.")
+    elif india_cl == ["HS"]:
+        _p("[sonda2] VEREDICTO: India responde SOLO bajo HS. El cero diario")
+        _p("[sonda2]            no se explica por la clasificacion.")
     else:
-        _p("[sonda2] VEREDICTO: mirar la tabla. Alguna clasificacion distinta responde.")
+        _p("[sonda2] VEREDICTO: hipotesis A CONFIRMADA — India responde bajo")
+        _p(f"[sonda2]            {india_cl}. El modulo tiene que cablearlo.")
+
+    solo_alias = brasil_cl == ["HS"]
+    if solo_alias:
+        _p()
+        _p("[sonda2] NOTA: el control solo responde bajo el alias 'HS'. Los")
+        _p("[sonda2]       codigos de revision no se sirven por esta ruta, asi")
+        _p("[sonda2]       que la matriz no puede descartar la hipotesis A.")
 
 
 # ---------------------------------------------------------------------------
