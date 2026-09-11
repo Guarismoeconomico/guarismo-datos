@@ -677,23 +677,93 @@ def bajar_resolviendo(cfg):
     raise ultimo
 
 
+# Los unicos codigos que significan "todavia no existe", que es CORRECTO en la
+# primera corrida. Cualquier otra cosa significa "no pude leer".
+NO_EXISTE = ("NoSuchKey", "NoSuchBucket", "404", "NotFound")
+
+
 def leer_estado(s3, bucket):
-    """Ultimo hash visto de cada archivo. Si no existe, arranca vacio."""
+    """Ultimo hash visto de cada archivo. Distingue "no existe" de "no puedo leer".
+
+    POR QUE ESTO ABORTA LA CORRIDA
+      Un `except Exception: return {}` trata igual dos cosas que no se
+      parecen:
+
+        NoSuchKey     -> primera corrida. {} es la respuesta correcta.
+        AccessDenied  -> la credencial es valida pero no puede LEER el estado.
+
+      En el segundo caso, devolver {} hace que el modulo trate los
+      29 objetos como nuevos, los RE-ARCHIVE, y despues pise el estado
+      bueno con uno reconstruido a ciegas.
+
+      Y en este modulo eso es peor que perder bytes: el log diria
+      "29 nuevos", que en la tabla de vigilancia significa
+      "UN ORGANISMO PUBLICO". Un hipo de credencial se disfrazaria de evento
+      de publicacion masiva. Mejor un workflow en rojo que una noticia falsa.
+
+      Paso de verdad el 8-sep-2026 en boveda_privadas.py, con un token cuya
+      fecha de INICIO todavia no habia llegado.
+    """
     try:
         obj = s3.get_object(Bucket=bucket, Key=ESTADO)
         return json.loads(obj["Body"].read().decode("utf-8"))
     except Exception as e:
-        print(f"[indec] sin estado previo ({type(e).__name__}) — se trata todo como nuevo")
-        return {}
+        codigo = type(e).__name__
+        try:
+            codigo = e.response["Error"]["Code"]          # botocore ClientError
+        except Exception:
+            pass
+        if codigo in NO_EXISTE or type(e).__name__ in NO_EXISTE:
+            print(f"[indec] sin estado previo ({codigo}) — se trata todo como nuevo")
+            return {}
+        raise RuntimeError(
+            f"no se pudo LEER el estado ({codigo}). La credencial responde pero "
+            f"no entrega {ESTADO}. Se aborta a proposito: seguir re-archivaria "
+            f"todo y pisaria el estado bueno."
+        ) from e
 
 
-def main():
+def main(argv=None):
+    argv = list(sys.argv[1:] if argv is None else argv)
+
+    # --seco: baja, resuelve la URL y hashea todo, pero NO escribe un solo
+    # byte en R2. Existe por la decision firme "toda fuente nueva se estrena
+    # en seco". Hasta el 8-sep-2026 esta era la unica mecanica sin modo seco
+    # ni workflow manual: una entrada nueva entraba directo a produccion, sin
+    # red, y si la URL no resolvia el hueco aparecia en la boveda diaria.
+    seco = "--seco" in argv
+
+    # --fuente=a,b,c: limita a esas entradas. Sin esto, probar UNA entrada
+    # nueva obliga a bajar las 29 (unos 30 MB) para mirar una sola linea.
+    solo = None
+    for a in argv:
+        if a.startswith("--fuente="):
+            solo = {x.strip() for x in a.split("=", 1)[1].split(",") if x.strip()}
+
     ahora = datetime.now(timezone.utc)
     run = re.sub(r"[^a-zA-Z0-9]+", "", os.getenv("GITHUB_RUN_ID", "local"))[:20]
     sello = f"{ahora:%Y%m%dT%H%M%SZ}_{run or 'local'}"
     bucket = os.getenv("R2_BUCKET") or BUCKET_DEFAULT
 
-    print(f"[indec] {len(ARCHIVOS)} archivos · captura de cuadros publicados")
+    if solo is not None:
+        # Un typo en --fuente= dejaria CERO archivos, y el modulo terminaria
+        # diciendo "Fallaron TODAS las descargas". Es un diagnostico FALSO: no
+        # fallo nada, no se pidio nada. Se aborta con codigo 2 y se dice cual
+        # fue el error. Mismo criterio que la mecanica D.
+        desconocidos = sorted(solo - set(ARCHIVOS))
+        if desconocidos:
+            print(f"[indec] archivo(s) inexistente(s): {', '.join(desconocidos)}")
+            print(f"[indec] disponibles: {', '.join(sorted(ARCHIVOS))}")
+            return 2
+
+    archivos = {k: v for k, v in ARCHIVOS.items() if solo is None or k in solo}
+
+    print(f"[indec] {len(archivos)} de {len(ARCHIVOS)} archivos · "
+          f"captura de cuadros publicados")
+    if seco:
+        print("[indec] ⚠ MODO SECO: no se escribe NADA en R2. Solo se informa.")
+    if solo is not None:
+        print(f"[indec] ⚠ SELECCION PARCIAL: {', '.join(sorted(solo))}")
 
     try:
         s3 = _cliente()
@@ -701,10 +771,14 @@ def main():
         print(f"[indec] R2 fallo (cliente): {type(e).__name__}: {e}")
         return 3
 
-    estado = leer_estado(s3, bucket)
+    try:
+        estado = leer_estado(s3, bucket)
+    except Exception as e:
+        print(f"[indec] R2 fallo (estado): {e}")
+        return 3
     entradas, ok, nuevos, huecos = [], 0, 0, 0
 
-    for clave, cfg in sorted(ARCHIVOS.items()):
+    for clave, cfg in sorted(archivos.items()):
         capturado = datetime.now(timezone.utc).isoformat(timespec="seconds")
         url_usada = cfg["url"]
         try:
@@ -741,22 +815,23 @@ def main():
             if cambio:
                 nombre = f"{clave}_{sello}.{cfg['ext']}"
                 obj = f"{PREFIJO}/{ahora:%Y/%m}/{nombre}"
-                s3.put_object(
-                    Bucket=bucket, Key=obj, Body=datos,
-                    ContentType=TIPOS.get(cfg["ext"], "application/octet-stream"),
-                    Metadata={
-                        "sha256": sha,
-                        "origen": "boveda-indec",
-                        "url": url_usada[:900],
-                        "capturado-utc": capturado,
-                    },
-                )
-                s3.put_object(
-                    Bucket=bucket, Key=obj + ".sha256",
-                    Body=f"{sha}  {nombre}\n".encode("utf-8"),
-                    ContentType="text/plain; charset=utf-8",
-                )
-                entrada["objeto"] = obj
+                if not seco:
+                    s3.put_object(
+                        Bucket=bucket, Key=obj, Body=datos,
+                        ContentType=TIPOS.get(cfg["ext"], "application/octet-stream"),
+                        Metadata={
+                            "sha256": sha,
+                            "origen": "boveda-indec",
+                            "url": url_usada[:900],
+                            "capturado-utc": capturado,
+                        },
+                    )
+                    s3.put_object(
+                        Bucket=bucket, Key=obj + ".sha256",
+                        Body=f"{sha}  {nombre}\n".encode("utf-8"),
+                        ContentType="text/plain; charset=utf-8",
+                    )
+                entrada["objeto"] = obj if not seco else obj + "  (SECO: no escrito)"
                 estado[clave] = {"sha256": sha, "objeto": obj, "visto_utc": capturado}
                 nuevos += 1
                 marca = "NUEVO  →" if previo else "PRIMERA→"
@@ -789,7 +864,11 @@ def main():
         "guarismo": "manifiesto de captura · cuadros publicados del INDEC",
         "capturado_utc": ahora.isoformat(timespec="seconds"),
         "fuente": "INDEC · indec.gob.ar",
-        "archivos_pedidos": len(ARCHIVOS),
+        "archivos_pedidos": len(archivos),
+        "archivos_del_catalogo": len(ARCHIVOS),
+        # Un manifiesto parcial tiene que decir que es parcial, o dentro
+        # de un año parece una corrida en la que faltaron 28 archivos.
+        "seleccion_parcial": sorted(solo) if solo is not None else None,
         "ok": ok,
         "nuevos": nuevos,
         "huecos": huecos,
@@ -797,6 +876,16 @@ def main():
         "commit": os.getenv("GITHUB_SHA", "local"),
         "entradas": entradas,
     }
+
+    if seco:
+        print(f"[indec] {ok}/{len(archivos)} OK · {nuevos} habrian sido nuevos · "
+              f"{huecos} huecos")
+        print("[indec] SECO · no se escribio nada (ni objetos, ni manifiesto, "
+              "ni estado).")
+        print("[indec] Si el log dice lo esperado, correr de nuevo sin --seco.")
+        if huecos:
+            print(f"⚠ {huecos} archivo(s) con hueco. Revisar arriba cuales.")
+        return 0
 
     try:
         clave_man = f"{PREFIJO}/manifiestos/{ahora:%Y/%m}/manifiesto_{sello}.json"
@@ -816,7 +905,7 @@ def main():
         print(f"[indec] R2 fallo (manifiesto/estado): {type(e).__name__}: {e}")
         return 3
 
-    print(f"[indec] {ok}/{len(ARCHIVOS)} OK · {nuevos} nuevos · {huecos} huecos")
+    print(f"[indec] {ok}/{len(archivos)} OK · {nuevos} nuevos · {huecos} huecos")
     print(f"[indec] manifiesto: {clave_man}")
     if huecos:
         print(f"⚠ {huecos} archivo(s) con hueco registrado. Revisar arriba cuales.")
