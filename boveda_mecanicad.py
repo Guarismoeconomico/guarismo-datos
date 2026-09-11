@@ -1105,13 +1105,50 @@ def _cliente():
     )
 
 
+# Los unicos codigos que significan "todavia no existe", que es CORRECTO en la
+# primera corrida. Cualquier otra cosa significa "no pude leer".
+NO_EXISTE = ("NoSuchKey", "NoSuchBucket", "404", "NotFound")
+
+
 def leer_estado(s3, bucket):
+    """Ultimo hash visto de cada archivo. Distingue "no existe" de "no puedo leer".
+
+    POR QUE ESTO ABORTA LA CORRIDA
+      Un `except Exception: return {}` trata igual dos cosas que no se
+      parecen:
+
+        NoSuchKey     -> primera corrida. {} es la respuesta correcta.
+        AccessDenied  -> la credencial es valida pero no puede LEER el estado.
+
+      En el segundo caso, devolver {} hace que el modulo trate los
+      27 objetos como nuevos, los RE-ARCHIVE, y despues pise el estado
+      bueno con uno reconstruido a ciegas.
+
+      Y en este modulo eso es peor que perder bytes: el log diria
+      "27 nuevos", que en la tabla de vigilancia significa
+      "UN ORGANISMO PUBLICO". Un hipo de credencial se disfrazaria de evento
+      de publicacion masiva. Mejor un workflow en rojo que una noticia falsa.
+
+      Paso de verdad el 8-sep-2026 en boveda_privadas.py, con un token cuya
+      fecha de INICIO todavia no habia llegado.
+    """
     try:
         obj = s3.get_object(Bucket=bucket, Key=ESTADO)
         return json.loads(obj["Body"].read().decode("utf-8"))
     except Exception as e:
-        print(f"[mecD] sin estado previo ({type(e).__name__}) — se trata todo como nuevo")
-        return {}
+        codigo = type(e).__name__
+        try:
+            codigo = e.response["Error"]["Code"]          # botocore ClientError
+        except Exception:
+            pass
+        if codigo in NO_EXISTE or type(e).__name__ in NO_EXISTE:
+            print(f"[mecD] sin estado previo ({codigo}) — se trata todo como nuevo")
+            return {}
+        raise RuntimeError(
+            f"no se pudo LEER el estado ({codigo}). La credencial responde pero "
+            f"no entrega {ESTADO}. Se aborta a proposito: seguir re-archivaria "
+            f"todo y pisaria el estado bueno."
+        ) from e
 
 
 # ---------------------------------------------------------------------------
@@ -1183,7 +1220,11 @@ def main(argv=None):
         print(f"[mecD] R2 fallo (cliente): {type(e).__name__}: {e}")
         return 3
 
-    estado = leer_estado(s3, bucket)
+    try:
+        estado = leer_estado(s3, bucket)
+    except Exception as e:
+        print(f"[mecD] R2 fallo (estado): {e}")
+        return 3
     entradas, ok, nuevos, huecos, inciertos = [], 0, 0, 0, 0
 
     for fuente, cfg in sorted(fuentes.items()):
