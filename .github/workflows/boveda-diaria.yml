@@ -1,7 +1,12 @@
 name: Guarismo boveda diaria
 
 # Corre TODOS los modulos de boveda de cadencia diaria en secuencia, con un
-# solo reloj. Son CINCO: datos.gob.ar, INDEC, BCRA, mecanica D y Comtrade.
+# solo reloj. Son SEIS: datos.gob.ar, INDEC, BCRA, mecanica D, Comtrade y
+# privadas (BCR/GEA).
+#
+# OJO: los cinco primeros escriben en guarismo-crudo; el sexto escribe en
+# guarismo-reservado con OTRAS credenciales. La separacion es de CREDENCIAL,
+# no de convencion: ver el comentario del paso de privadas al final.
 #
 # Por que agrupado por CADENCIA y no por fuente: un workflow por modulo son
 # doce relojes en dos meses, y el dia que se regenere el PAT hay que tocarlos
@@ -138,3 +143,38 @@ jobs:
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           R2_BUCKET: guarismo-crudo
         run: python boveda_comtrade.py
+
+      # Privadas: BCR/GEA al almacen RESERVADO (mecanica F).
+      #
+      # POR QUE ENTRA AL DIARIO SI LA FUENTE PUBLICA UNA VEZ POR MES
+      #   Por dos razones, y la segunda es la que manda.
+      #   1) El gatillo NO es el article:modified_time del listado, que esta
+      #      congelado en 2019 mientras el contenido cambia todos los meses. Se
+      #      gatilla por APARICION DE CLAVE, y eso solo funciona mirando todos
+      #      los dias.
+      #   2) El manifiesto se escribe TODOS los dias, aunque no pase nada: es la
+      #      constancia de "mire y no habia nada". Sin eso no hay Clase A, hay
+      #      silencio. Cada dia sin manifiesto es un hueco en la cadena.
+      #
+      # QUE CUESTA EN REGIMEN: un request al listado por dia.
+      #
+      # SEPARACION DE ALMACEN, Y ES DE CREDENCIAL
+      #   Este paso recibe SOLO R2_RESERVADO_*. NUNCA se le agregan
+      #   R2_ACCESS_KEY_ID ni R2_SECRET_ACCESS_KEY: el proceso que captura
+      #   privadas no tiene en su entorno las llaves del archivo publicable, ni
+      #   siquiera para leer. Si algun dia las necesitara, tiene que ser una
+      #   decision explicita y no un copiar-y-pegar del paso de arriba.
+      #   Tampoco lleva R2_BUCKET: el modulo lee R2_BUCKET_RESERVADO y trae su
+      #   propio default.
+      #
+      # EDITADO distinto de cero NO es un error: es BCR editando un informe ya
+      # publicado. Es la alarma funcionando.
+      #
+      # El BACKFILL no corre aca. Vive en boveda-privadas-manual.yml.
+      - name: Capturar privadas (BCR/GEA) al almacen reservado
+        if: always()          # corre aunque los modulos anteriores hayan fallado
+        env:
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+          R2_RESERVADO_ACCESS_KEY_ID: ${{ secrets.R2_RESERVADO_ACCESS_KEY_ID }}
+          R2_RESERVADO_SECRET_ACCESS_KEY: ${{ secrets.R2_RESERVADO_SECRET_ACCESS_KEY }}
+        run: python boveda_privadas.py
