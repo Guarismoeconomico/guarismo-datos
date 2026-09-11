@@ -1,0 +1,82 @@
+name: Guarismo boveda INDEC (manual)
+
+# Workflow MANUAL de la mecanica B (archivo de URL resoluble: cuadros del
+# INDEC y del BCRA). NO tiene reloj y no lo va a tener nunca: el reloj de este
+# modulo es boveda-diaria.yml, disparado por cron-job.org.
+#
+# POR QUE EXISTE
+#   Hasta el 8-sep-2026 esta era la UNICA mecanica sin modo seco ni workflow
+#   propio. Consecuencia: una entrada nueva del catalogo entraba directo a la
+#   boveda diaria, en produccion, sin red. Si la URL no resolvia, el hueco
+#   aparecia en la corrida de las 19:15 y ensuciaba el verde.
+#
+#   Eso chocaba de frente con la decision firme "toda fuente nueva se estrena
+#   con --seco", que las mecanicas D, E y F ya cumplian.
+#
+# ORDEN DE USO — de menos a mas irreversible
+#   1. modo=seco + fuente=<la_nueva>  -> baja UNA entrada, resuelve la URL y
+#                                        hashea. NO escribe un byte en R2.
+#   2. modo=normal + fuente=<la_nueva> -> la archiva sola. El manifiesto queda
+#                                        marcado como seleccion_parcial.
+#   3. (recien ahi)                    -> dejarla correr en la boveda diaria.
+#
+# QUE MIRAR EN EL LOG
+#   · Que NO aparezca "sin estado previo". Esa linea, en una corrida que no es
+#     la primera, significa que el estado no se pudo leer.
+#   · Los bytes. Un .xls del INDEC de ~37 KB NO es el cuadro: es la pagina de
+#     error. El INDEC no devuelve 404, redirige a Error-Default con 2xx.
+#   · El content_type queda registrado en el manifiesto y es el discriminador
+#     real. El status HTTP no sirve para esta fuente.
+#   · "url_final" distinta de "url" significa que el INDEC redirigio. Es un
+#     hecho de la fuente y se registra.
+#
+# OJO: sin --fuente= baja las 29 entradas, unos 30 MB. Para probar UNA, usar
+# el campo fuente. Acepta lista separada por comas.
+
+on:
+  workflow_dispatch:
+    inputs:
+      modo:
+        description: "seco = no escribe nada · normal = archiva"
+        required: true
+        default: seco
+        type: choice
+        options:
+          - seco
+          - normal
+      fuente:
+        description: "Entrada(s) a capturar, separadas por coma. VACIO = las 29."
+        required: false
+        default: ""
+        type: string
+
+jobs:
+  indec:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - run: pip install requests boto3
+
+      - name: Capturar cuadros del INDEC a R2
+        env:
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET: guarismo-crudo
+          MODO: ${{ inputs.modo }}
+          FUENTE: ${{ inputs.fuente }}
+        run: |
+          ARGS=""
+          case "$MODO" in
+            seco)   ARGS="--seco" ;;
+            normal) ARGS="" ;;
+            *) echo "modo desconocido: $MODO"; exit 2 ;;
+          esac
+          if [ -n "$FUENTE" ]; then ARGS="$ARGS --fuente=$FUENTE"; fi
+          echo "modo=$MODO fuente=${FUENTE:-todas} args='$ARGS'"
+          python boveda_indec.py $ARGS
