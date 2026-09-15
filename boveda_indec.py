@@ -551,6 +551,46 @@ ARCHIVOS = {
         "ext": "pdf",
         "desc": "Metodologia del ITCNM. Metodologia hasheada del Tier 4.",
     },
+
+    # --- Tier 4: el calendario del INDEC COMO DATO ------------------------
+    #
+    # No es una serie: es la PROMESA de la fuente. Capturarlo todos los dias
+    # convierte un corrimiento de fecha en un hecho registrado y fechado, que
+    # es el insumo del indicador propio de puntualidad.
+    #
+    # 🔴 SE REESCRIBE, y por eso es irrecuperable. El INDEC declara que
+    # "cada mes se publica el cronograma del mismo mes del año siguiente":
+    # el PDF del semestre se actualiza mes a mes. El capturado el 15-sep-2026
+    # dice adentro "Actualizado al 1/7/2026". La version anterior no queda en
+    # ningun lado.
+    #
+    # Patron (b): el año va adentro y lo resuelve urls_candidatas(). En enero
+    # el 2sem del año nuevo todavia no existe y cae al del año anterior, que
+    # es lo correcto.
+    "indec_calendario_1sem": {
+        "url": "https://www.indec.gob.ar/ftp/cuadros/publicaciones/"
+               "calendario_1sem{anio}.pdf",
+        "ext": "pdf",
+        "desc": "Calendario de difusion del INDEC, primer semestre. La fecha "
+                "prometida de cada publicacion. Tier 4: un corrimiento es un hecho.",
+    },
+    "indec_calendario_2sem": {
+        "url": "https://www.indec.gob.ar/ftp/cuadros/publicaciones/"
+               "calendario_2sem{anio}.pdf",
+        "ext": "pdf",
+        "desc": "Calendario de difusion del INDEC, segundo semestre. Idem 1sem.",
+    },
+    "indec_politica_difusion": {
+        "url": "https://sitioanterior.indec.gob.ar/ftp/cuadros/publicaciones/"
+               "politica_difusion_indec.pdf",
+        "ext": "pdf",
+        "desc": "Politicas de difusion estadistica del INDEC. Es el documento que "
+                "DECLARA la hora: 'se ha fijado el horario de las 4 p.m. UTC-03:00 "
+                "para todas las estadisticas comprendidas en el calendario'. Cierra "
+                "una verificacion que estaba pendiente. "
+                "⚠️ Vive en sitioanterior.indec.gob.ar, la URL fragil: razon de mas "
+                "para hashearlo antes de que se caiga.",
+    },
 }
 
 # Tipo de contenido por extension. Se declara al subir a R2 para que el objeto
