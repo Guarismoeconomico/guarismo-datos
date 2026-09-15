@@ -28,6 +28,10 @@ CINCO PATRONES DE URL — verificados el 3, el 4 y el 7-sep-2026
         variaciones_salarios_08_26.xls. Se escribe {mes} y lo resuelve
         _meses_publicacion(). Es el patron mas barato de los cinco: no hay
         ventana de dias que probar, solo el mes corriente y el anterior.
+    (f) Con el MES DEL DATO: relevamiento-expectativas-mercado-ago-2026.pdf.
+        Se escribe {mes3} y lo resuelve _meses_dato(). Es (e) AL REVES, y por
+        eso es un patron aparte: el BCRA nombra por el mes del dato y el INDEC
+        por el de publicacion. El REM de agosto salio el 4 de septiembre.
 
     El patron (d) parecia imposible de cablear y por eso el ICA estaba anotado
     como mecanica D (scraping). No hace falta: se prueban los dias de la
@@ -136,6 +140,8 @@ DIA_HASTA = 24
 #       {dia} y lo resuelve _dias_publicacion() probando la ventana.
 #   (e) URL con el MES de publicacion mensual (sh_ipc_08_26.xls). Se escribe
 #       {mes} y lo resuelve _meses_publicacion() con caida al mes anterior.
+#   (f) URL con el MES DEL DATO (relevamiento-expectativas-mercado-ago-2026).
+#       Se escribe {mes3} y lo resuelve _meses_dato(). Inverso a (e).
 #
 # Lo que NO entra aca es lo que no tiene nombre predecible NI URL plana: los
 # comunicados de Hacienda con slug cambiante, el listado de SAGyP. El cuadro
@@ -407,6 +413,83 @@ ARCHIVOS = {
                 "Complementa a salarios_indice/salarios_variacion, que son los csv "
                 "de URL fija: este es el cuadro completo.",
     },
+
+    # --- REM del BCRA: el producto de vintages de pronostico -------------
+    #
+    # SIETE archivos, y NO son la misma cosa. Dos llevan el periodo en el
+    # nombre y el BCRA los archiva; los otros CINCO viven en una URL FIJA que
+    # se sobrescribe todos los meses. Esos cinco son IRRECUPERABLES: el hash
+    # es la unica prueba de que cambiaron, igual que el cronograma de
+    # licitaciones de Finanzas.
+    #
+    # 🔴 TRAMPA DE NOMBRES, Y ES LA INVERSA DE LA DEL INDEC
+    #   El informe de AGOSTO se publico el 4 de SEPTIEMBRE y se llama
+    #   "ago-2026". El nombre lleva el mes del DATO, no el de publicacion.
+    #   El INDEC hace exactamente lo contrario. Por eso estas entradas usan
+    #   {mes3} y no {mes}: son dos resolvedores distintos a proposito.
+    #
+    # CRONOGRAMA verificado sobre cuatro ediciones: abr-2026 -> 07/05,
+    # jul-2026 -> 06/08, ago-2026 -> 04/09. Regla: entre el dia 4 y el 8 del
+    # mes siguiente. La propia pagina declara que el relevamiento se hace
+    # "los ultimos 3 dias habiles de cada mes".
+    "rem_informe": {
+        "url": "https://www.bcra.gob.ar/archivos/Pdfs/PublicacionesEstadisticas/"
+               "informes/relevamiento-expectativas-mercado-{mes3}.pdf",
+        "ext": "pdf",
+        "desc": "REM del BCRA, informe mensual. Patron (f): el nombre lleva el MES "
+                "DEL DATO, no el de publicacion — inverso al INDEC. Una foto de "
+                "expectativas no se revisa: el valor esta en conservar CADA edicion.",
+    },
+    "rem_tablas": {
+        "url": "https://www.bcra.gob.ar/archivos/Pdfs/PublicacionesEstadisticas/"
+               "informes/tablas-relevamiento-expectativas-mercado-{mes3}.xlsx",
+        "ext": "xlsx",
+        "desc": "REM, tablas de resultados por variable y por participante. Patron "
+                "(f), mismo periodo que rem_informe. Es el dato estructurado detras "
+                "del PDF.",
+    },
+    "rem_participantes": {
+        "url": "https://www.bcra.gob.ar/archivos/Pdfs/PublicacionesEstadisticas/"
+               "informes/listado-relevamiento-expectativas-mercado.pdf",
+        "ext": "pdf",
+        "desc": "REM, listado de participantes. URL FIJA: el BCRA publica SOLO el "
+                "listado vigente y lo pisa cada mes — la lista del mes pasado deja "
+                "de existir. Los participantes pasaron de 45 en jul-2026 (33 "
+                "consultoras + 12 entidades) a 47 en ago-2026 (35 + 12). "
+                "IRRECUPERABLE: capturarlo mensualmente construye una serie de "
+                "quien pronostica la economia argentina que no existe en ningun lado.",
+    },
+    "rem_ranking": {
+        "url": "https://www.bcra.gob.ar/archivos/Pdfs/PublicacionesEstadisticas/"
+               "informes/ranking-relevamiento-expectativas-mercado.xlsx",
+        "ext": "xlsx",
+        "desc": "REM, ranking de participantes por precision. URL FIJA, se pisa cada "
+                "mes. Es la propia fuente midiendo QUIEN ACERTO — un derivado de "
+                "precision hecho por el BCRA. IRRECUPERABLE.",
+    },
+    "rem_historico": {
+        "url": "https://www.bcra.gob.ar/archivos/Pdfs/PublicacionesEstadisticas/"
+               "informes/historico-relevamiento-expectativas-mercado.xlsx",
+        "ext": "xlsx",
+        "desc": "REM, resultados historicos acumulados. URL FIJA, se pisa cada mes. "
+                "Si el BCRA corrige un valor viejo, no queda rastro en ningun otro "
+                "lado. IRRECUPERABLE, y es la pieza mas valiosa de las cinco fijas.",
+    },
+    "rem_metodologia_ranking": {
+        "url": "https://www.bcra.gob.ar/archivos/Pdfs/PublicacionesEstadisticas/"
+               "informes/metodologia-relevamiento-expectativas-mercado.pdf",
+        "ext": "pdf",
+        "desc": "REM, metodologia del ranking. URL FIJA. Metodologia hasheada del "
+                "Tier 4: el dia que cambie como se mide la precision, queda el antes "
+                "y el despues probados.",
+    },
+    "rem_consideraciones": {
+        "url": "https://www.bcra.gob.ar/archivos/Pdfs/PublicacionesEstadisticas/"
+               "informes/consideraciones-relevamiento-expectativas-mercado.pdf",
+        "ext": "pdf",
+        "desc": "REM, consideraciones metodologicas del relevamiento. URL FIJA. "
+                "Metodologia hasheada del Tier 4.",
+    },
 }
 
 # Tipo de contenido por extension. Se declara al subir a R2 para que el objeto
@@ -575,6 +658,48 @@ def _dias_publicacion(hoy=None):
     return salida
 
 
+# Abreviatura castellana de tres letras, como la escribe el BCRA en el nombre
+# del archivo. Verificadas contra URLs reales: abr, jul, ago.
+#
+# ⚠️ SEPTIEMBRE VA CON DOS FORMAS, "sep" y "set". En castellano las dos se
+# usan y NO esta verificado cual elige el BCRA. Probar las dos cuesta UN pedido
+# extra durante un mes al año; equivocarse cuesta perder la captura Clase A de
+# esa edicion. Cuando se vea cual responde, se deja una sola y se borra esta
+# nota.
+MES3 = {1: ("ene",), 2: ("feb",), 3: ("mar",), 4: ("abr",), 5: ("may",),
+        6: ("jun",), 7: ("jul",), 8: ("ago",), 9: ("sep", "set"),
+        10: ("oct",), 11: ("nov",), 12: ("dic",)}
+
+
+def _meses_dato(hoy=None):
+    """Los dos ultimos meses DE DATO, como "{abrev}-{aaaa}".
+
+    PATRON (f), y existe porque el BCRA nombra AL REVES que el INDEC.
+    El informe del REM de agosto de 2026 se publico el 4 de septiembre y se
+    llama relevamiento-expectativas-mercado-ago-2026.pdf: el nombre lleva el
+    mes del DATO. El INDEC, en cambio, nombra por mes de PUBLICACION. Meter
+    los dos en el mismo resolvedor seria garantizar que alguien se confunda.
+
+    DOS CANDIDATOS, por el mismo motivo que los otros cuatro patrones: el REM
+    sale entre el dia 4 y el 8, asi que durante la primera semana de cada mes
+    el informe del mes anterior todavia no existe y el vigente es el de dos
+    meses atras. Sin el segundo candidato el modulo registraria un hueco
+    inventado una semana de cada cuatro.
+
+    Y NO SE BAJA MAS DE DOS, a proposito: dos meses seguidos sin publicar es un
+    hecho de la fuente y tiene que quedar como HUECO FECHADO, no taparse con
+    un archivo viejo.
+    """
+    hoy = hoy or datetime.now(timezone.utc)
+    anio, mes = (hoy.year - 1, 12) if hoy.month == 1 else (hoy.year, hoy.month - 1)
+    salida = []
+    for _ in range(2):
+        for abrev in MES3[mes]:
+            salida.append(f"{abrev}-{anio}")
+        anio, mes = (anio - 1, 12) if mes == 1 else (anio, mes - 1)
+    return salida
+
+
 def _meses_publicacion(hoy=None):
     """Los dos ultimos meses de publicacion mensual, como (mm, aa).
 
@@ -643,6 +768,8 @@ def urls_candidatas(url):
     Lo unico que NO se resuelve asi es lo que no tiene nombre predecible NI URL
     plana: los comunicados de Hacienda con slug cambiante y el listado de SAGyP.
     """
+    if "{mes3}" in url:
+        return [url.replace("{mes3}", p) for p in _meses_dato()]
     if "{trim}" in url:
         return [url.replace("{trim}", f"{mm:02d}_{aa:02d}")
                 for mm, aa in _trimestres_publicacion()]
