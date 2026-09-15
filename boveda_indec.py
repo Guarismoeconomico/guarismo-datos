@@ -490,6 +490,67 @@ ARCHIVOS = {
         "desc": "REM, consideraciones metodologicas del relevamiento. URL FIJA. "
                 "Metodologia hasheada del Tier 4.",
     },
+
+    # --- ITCRM / ITCNM del BCRA: el tipo de cambio multilateral ----------
+    #
+    # Entraron REEMPLAZANDO al REER del BIS, que publicaba lo mismo con una
+    # condicion incomoda (no puede haber cargo especifico por el dato en un
+    # producto comercial). Estos son 🟢 y diarios, contra el mensual del BIS.
+    #
+    # 🔴 LOS DOS XLSX SON IRRECUPERABLES, Y NO ES OBVIO
+    #   Parecen "una serie historica que se baja una vez". No lo son: es UN
+    #   archivo con URL fija que el BCRA REESCRIBE TODOS LOS DIAS, agregando
+    #   el dato del dia. Y no solo agrega: el ITCRM incorpora indices de
+    #   precios que llegan despues, con "un mecanismo de diarizacion de las
+    #   estimaciones y de replicacion de los ultimos datos" que declara la
+    #   propia pagina. Traducido: los valores recientes se RECALCULAN hacia
+    #   atras. Si no se captura todos los dias, esa version no existe mas.
+    #
+    #   Y las ponderaciones se mueven solas: la pagina declara promedios
+    #   moviles de 12 meses (hoy Brasil 32%, zona euro 19%, China 16%,
+    #   EEUU 12%). Un indice cuyas ponderaciones cambian mes a mes se revisa
+    #   hacia atras sin avisar.
+    #
+    # EL modified_time DE LA PAGINA NO SIRVE de gatillo: dice 20-ago-2026
+    # mientras los archivos cambian a diario. Manda el hash.
+    #
+    # PENDIENTE, y NO entra aca porque es otra mecanica: la pagina
+    # "Metodologias anteriores ITCRM"
+    # (bcra.gob.ar/metodologias-anteriores-itcrm/) es un LISTADO, no un
+    # archivo. Es mecanica D. El BCRA publica ahi sus propias metodologias
+    # viejas — exactamente el material del Tier 4.
+    "itcrm_serie": {
+        "url": "https://www.bcra.gob.ar/archivos/Pdfs/PublicacionesEstadisticas/"
+               "ITCRMSerie.xlsx",
+        "ext": "xlsx",
+        "desc": "Indice de Tipo de Cambio Real Multilateral, serie DIARIA completa "
+                "desde el 01/01/1997, mas los bilaterales de los 12 socios. URL FIJA "
+                "que se reescribe todos los dias. IRRECUPERABLE: la version de ayer "
+                "no queda en ningun lado.",
+    },
+    "itcnm_serie": {
+        "url": "https://www.bcra.gob.ar/archivos/Pdfs/PublicacionesEstadisticas/"
+               "ITCNMSerie.xlsx",
+        "ext": "xlsx",
+        "desc": "Indice de Tipo de Cambio Nominal Multilateral, serie DIARIA completa "
+                "mas los bilaterales. URL FIJA que se reescribe todos los dias. "
+                "IRRECUPERABLE. Es el par nominal del ITCRM: la divergencia entre los "
+                "dos es el componente de precios, y se puede medir sin transformar "
+                "nada porque los publica la misma fuente.",
+    },
+    "itcrm_metodologia": {
+        "url": "https://www.bcra.gob.ar/archivos/Pdfs/PublicacionesEstadisticas/"
+               "TCRMMetodologia.pdf",
+        "ext": "pdf",
+        "desc": "Metodologia del ITCRM. Laspeyres geometrico encadenado, base "
+                "17-dic-2015=100. Metodologia hasheada del Tier 4.",
+    },
+    "itcnm_metodologia": {
+        "url": "https://www.bcra.gob.ar/archivos/Pdfs/PublicacionesEstadisticas/"
+               "TCNMMetodologia.pdf",
+        "ext": "pdf",
+        "desc": "Metodologia del ITCNM. Metodologia hasheada del Tier 4.",
+    },
 }
 
 # Tipo de contenido por extension. Se declara al subir a R2 para que el objeto
