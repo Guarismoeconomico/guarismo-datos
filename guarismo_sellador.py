@@ -37,6 +37,29 @@ QUÉ ES LA RAÍZ
 Anclando un solo hash queda anclada toda la historia previa: si cambiara
 cualquier captura vieja, su hash cambiaría, y con él todos los eslabones
 siguientes hasta la cabeza — que no coincidiría con la raíz ya publicada.
+
+
+UN DÍA ANCLADO NO SE REESCRIBE — 16-sep-2026
+---------------------------------------------
+El workflow corre dos veces por día: cron-job.org a las 02:40 UTC y el
+`schedule` de GitHub, que llega horas tarde. Hasta esta versión, la segunda
+corrida encontraba otra raíz (el agregador capturó en el medio) y REESCRIBÍA
+el .json del día. El .ots se quedaba con la prueba del .json VIEJO: `ots
+stamp` no pisa un .ots existente (lo abre en modo exclusivo y sale con código
+1). Y como el código solo miraba si el .ots EXISTÍA, imprimía "✓ sello
+creado" igual.
+
+Medido el 15 y 16-sep-2026: en 58 de 60 días el .json publicado no era el que
+probaba su .ots. La versión probada quedó en el historial de git.
+
+Ahora:
+  - si el día ya tiene .ots, su .json NO se toca. Lo capturado después queda
+    cubierto por el sello de mañana: la raíz de mañana encadena todo.
+  - el "✓ sello creado" sale solo si `ots stamp` terminó bien Y el .ots es
+    nuevo. Si había un .ots de antes para un .json recién escrito, la corrida
+    termina en ROJO y no se publica: ese .ots no prueba lo escrito.
+  - si el día quedó sin .ots (el anclaje falló) y la raíz no cambió, se ancla
+    ahora. Para eso sirve la segunda corrida.
 """
 
 import datetime as dt
@@ -124,22 +147,37 @@ def sellar() -> int:
 
     DIR_SELLOS.mkdir(exist_ok=True)
     archivo = DIR_SELLOS / f"{doc['fecha']}.json"
+    ots = archivo.parent / f"{archivo.name}.ots"
 
-    # Si el día ya fue sellado y la raíz no cambió, no se rehace: el .ots
-    # existente ya cubre ese estado y rehacerlo perdería el sello viejo.
+    # UN DÍA ANCLADO NO SE REESCRIBE. Ver el encabezado.
+    anclar_existente = False
     if archivo.exists():
         try:
             previo = json.loads(archivo.read_text(encoding="utf-8"))
+        except Exception:
+            previo = {}
+        if ots.exists():
             if previo.get("raiz") == raiz:
                 print(f"\n   {archivo} ya existe con la misma raíz. Nada que hacer.")
-                return 0
-            print(f"\n   {archivo} existe con otra raíz: se actualiza"
+            else:
+                print(f"\n   {archivo} ya está ANCLADO: tiene .ots, y la raíz de")
+                print("   ahora es otra (hubo capturas después). No se reescribe:")
+                print("   el .ots prueba ESE archivo, y reescribirlo lo dejaría sin")
+                print("   prueba. Lo nuevo queda cubierto por el sello de mañana.")
+            return 0
+        if previo.get("raiz") == raiz:
+            print(f"\n   {archivo} existe con la misma raíz pero SIN .ots:"
+                  " se ancla ahora.")
+            anclar_existente = True
+        else:
+            print(f"\n   {archivo} existe con otra raíz y SIN .ots: se actualiza"
                   f" (hubo capturas nuevas hoy).")
-        except Exception:
-            pass
 
-    archivo.write_text(_canon(doc) + "\n", encoding="utf-8")
-    print(f"\n▸ Escrito {archivo}")
+    if not anclar_existente:
+        archivo.write_text(_canon(doc) + "\n", encoding="utf-8")
+        print(f"\n▸ Escrito {archivo}")
+
+    ots_previo = ots.exists()
 
     # --- anclaje en Bitcoin -------------------------------------------------
     # Si falla, NO se aborta: la raíz ya quedó publicada en el repo, que es la
@@ -151,11 +189,18 @@ def sellar() -> int:
         salida = (r.stdout + r.stderr).strip()
         for linea in salida.splitlines():
             print(f"   {linea}")
-        if (archivo.parent / f"{archivo.name}.ots").exists():
+        if ots_previo:
+            # Un .ots de ANTES al lado de un .json recién escrito no lo prueba.
+            # No se publica: la corrida termina en rojo para que se vea.
+            print(f"   ✗ ya había un {ots.name} de antes: NO prueba el .json")
+            print("     recién escrito. No se publica. Revisar a mano.")
+            return 1
+        if r.returncode == 0 and ots.exists():
             print("   ✓ sello creado. Confirma en Bitcoin en unas horas;")
             print("     después correr:  python guarismo_sellador.py actualizar")
         else:
-            print("   ⚠ no se generó el .ots. La raíz igual quedó publicada.")
+            print(f"   ⚠ no se generó el .ots (código {r.returncode}). "
+                  "La raíz igual quedó publicada.")
     except FileNotFoundError:
         print("   ⚠ 'ots' no está instalado (pip install opentimestamps-client).")
         print("     La raíz igual quedó publicada en el repo.")
