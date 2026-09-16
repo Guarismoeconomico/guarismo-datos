@@ -87,6 +87,31 @@ MOTOR COMUN, ETIQUETADOR POR FUENTE
     el etiquetador — quince lineas por fuente — decide que periodo es cada uno.
     Agregar la deuda MENSUAL despues es un etiquetador mas, no un modulo nuevo.
 
+    (6) GATILLO POR LISTADO — SAGyP, 15-sep-2026.
+        El listado de Estimaciones Agricolas no es Drupal: es PHP y NO declara
+        article:modified_time. Y muestra UN MES POR VEZ (?mes=AAAA-MM).
+
+        Dos consecuencias, las dos resueltas por configuracion de la fuente
+        ("gatillo": "listado" y "paginas_por_mes": N), sin tocar a las
+        otras siete:
+
+          - la pagina se gatilla por la FIRMA DEL LISTADO: el sha256 de los
+            pares (url, etiqueta) que devuelve el etiquetador. Cambia cuando
+            aparece o desaparece una clave, no cuando el servidor reserializa.
+            Es la aparicion de clave de boveda_privadas.py con BCR.
+          - se miran el mes en curso y el anterior, cada uno con su propia
+            clave de estado. Sin eso, el 1ro de cada mes el listado "cambia"
+            porque cambio el mes, no porque alguien publico.
+
+        Fuentes de una sola pagina y sin gatillo declarado: todo como antes.
+
+    (7) _absoluta() RESUELVE CONTRA EL HOST DE LA PAGINA.
+        Hasta el 15-sep-2026 pegaba "https://www.argentina.gob.ar" a todo href
+        que empezara con "/", y el parametro `base` no se usaba. Con siete
+        fuentes de argentina.gob.ar no se notaba. Con SAGyP habria armado
+        https://www.argentina.gob.ar/sitio/areas/estimaciones/... — una URL de
+        otro organismo. Lo encontro la lectura antes de cablear, no un hueco.
+
 LO QUE NO HACE
     No descomprime los .zip ni los .rar del fiscal. Se archiva el objeto que
     publico el organismo, tal cual. Descomprimir seria producir un artefacto
@@ -103,7 +128,7 @@ import os
 import re
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import requests
 
@@ -116,6 +141,10 @@ PREFIJO = "boveda/mecanicad"
 ESTADO = "_estado/mecanicad_hashes.json"
 
 UA = {"User-Agent": "Guarismo/1.0 (+https://guarismo.com.ar; infoguarismo@gmail.com)"}
+
+# Toda hora lleva zona. El mes "en curso" de un listado mensual es el mes de
+# Buenos Aires, no el de UTC: la corrida de las 19:15 ARG ya es 22:15 UTC.
+ARG = timezone(timedelta(hours=-3), "ART")
 
 # Cuantas ediciones se capturan por familia/producto en la corrida normal.
 # DOS, no una: el fiscal se revisa, y una correccion al mes anterior aparece
@@ -271,6 +300,34 @@ FUENTES = {
         "etiquetador": "deuda_mens_calendario",
         "organismo": "Secretaria de Finanzas",
     },
+
+    # --- SAGyP, Estimaciones Agricolas. Cableada el 15-sep-2026. ---
+    #
+    # PRIMERA FUENTE DEL MODULO FUERA DE argentina.gob.ar, y primera sin
+    # article:modified_time. Por eso trae dos claves que nadie mas usa:
+    #
+    #   gatillo="listado"    la pagina se archiva cuando cambia la LISTA de
+    #                        informes, no su hash. Ver (6) arriba.
+    #   paginas_por_mes=2    el listado muestra un mes por vez; se miran el
+    #                        mes en curso y el anterior. Ver paginas_de().
+    #
+    # POR QUE ACA Y NO EN LA MECANICA B: publica en jueves sin dia fijo del
+    # mes (tercero o cuarto) y el nombre del archivo cambia de mayuscula de un
+    # mes a otro ("Informe mensual" en julio 2026, "Informe Mensual" en
+    # agosto). Adivinar URLs serian ~25 pedidos por dia y fallaria igual.
+    #
+    # LA FECHA PROMETIDA ESTA ADENTRO DEL PDF: el mensual del 20-ago-2026
+    # anuncia el proximo para el 17-sep-2026. Esa es la alarma.
+    #
+    # Estatal -> redistribuible -> guarismo-crudo, como las otras siete.
+    "sagyp_estimaciones": {
+        "url": "https://www.magyp.gob.ar/sitio/areas/estimaciones/estimaciones/informes/",
+        "desc": "SAGyP — Estimaciones Agricolas, informes mensual y semanal",
+        "etiquetador": "sagyp",
+        "organismo": "Secretaria de Agricultura, Ganaderia y Pesca",
+        "gatillo": "listado",
+        "paginas_por_mes": 2,
+    },
 }
 
 
@@ -403,7 +460,12 @@ def _absoluta(href, base):
     if href.startswith("//"):
         return "https:" + href
     if href.startswith("/"):
-        return "https://www.argentina.gob.ar" + href
+        # Contra el HOST DE LA PAGINA. Ver (7) en el encabezado. Sin base se
+        # mantiene el comportamiento historico, que es el de las siete
+        # fuentes de argentina.gob.ar.
+        mb = HOST.match(base or "")
+        host = mb.group(1) if mb else "www.argentina.gob.ar"
+        return "https://" + host + href
     return None
 
 
@@ -933,6 +995,107 @@ def etiquetar_deuda_ant(pagina, base):
     return salida
 
 
+# Solo cuenta lo que vive en el archivo de informes. Un PDF del menu o del pie
+# no es un informe y no tiene que sonar como etiqueta sin resolver.
+SAGYP_ARCHIVOS = "/_archivos/estimaciones/"
+
+SAGYP_EVENTO = re.compile(
+    r"""(?P<agenda>\bspan1\b[^>]*>\s*(?P<dia>\d{1,2})\s*</div>\s*
+            <div\b[^>]*\bspan2\b[^>]*>\s*(?P<mesn>[^<]+?)\s*</div>)
+       |(?P<link><a\b[^>]*href="(?P<href>[^"]+)"[^>]*>(?P<ltxt>.*?)</a>)""",
+    re.S | re.I | re.X,
+)
+
+SAGYP_PRODUCTO = re.compile(r"\binforme\s+(mensual|semanal)\b", re.I)
+SAGYP_FECHA = re.compile(
+    r"\bal\s+(\d{1,2})[_/.\-](\d{1,2})[_/.\-]((?:19|20)\d{2})\b", re.I)
+
+
+def etiquetar_sagyp(pagina, base):
+    """Agenda de jueves · el TEXTO DEL LINK dice producto y fecha.
+
+    LA PAGINA, TAL CUAL ESTA AL 15-sep-2026 (?mes=2026-08)
+        Jueves 20 Agosto
+            <a> Informe Mensual al 20_08_2026
+            <a> Informe Semanal al 20_08_2026
+        + un <input name="mes" value="2026-08"> que dice de que mes es la hoja.
+
+    DE DONDE SALE CADA COSA
+        periodo    la fecha del TEXTO DEL LINK ("al 20_08_2026"). Es el corte
+                   que declara la fuente. Nunca del nombre del archivo.
+        producto   "mensual" o "semanal", del texto del link, en minuscula.
+                   La fuente cambio la mayuscula entre julio y agosto de 2026;
+                   sin normalizar serian dos series. El texto crudo queda
+                   entero en `etiqueta`.
+        agenda     el dia y mes del bloque ("Jueves 20 Agosto") + el año de
+                   la hoja. Es la fecha en que la AGENDA ubica el informe.
+
+    ETIQUETA Y AGENDA SON DOS COSAS, Y SI DIFIEREN NO ES UN ERROR
+        "al 20_08" es el corte del dato; el bloque es el dia de la agenda. En
+        las seis entradas vistas coinciden. Si un dia no coinciden, eso es un
+        HECHO de puntualidad, no una etiqueta rota: se archiva igual y queda
+        agenda_distinta_de_etiqueta=True en el manifiesto.
+
+    LO QUE NO RESUELVE, SUENA
+        Un informe que no diga mensual/semanal, o sin fecha legible, queda
+        incierto: no se archiva y aparece en el log para que lo mire un humano.
+    """
+    m_hoja = re.search(r'name="mes"\s+value="((?:19|20)\d{2})-(\d{2})"', pagina)
+    anio_hoja = int(m_hoja.group(1)) if m_hoja else None
+    agenda, salida = None, []
+    for m in SAGYP_EVENTO.finditer(pagina):
+        if m.group("agenda"):
+            mes = MESES.get(_limpiar(m.group("mesn")).lower())
+            dia = int(m.group("dia"))
+            agenda = (f"{anio_hoja:04d}-{mes:02d}-{dia:02d}"
+                      if (anio_hoja and mes) else None)
+            continue
+        a = _href(m.group("href"))
+        ext = _ext_de(a)
+        if ext not in EXTENSIONES or SAGYP_ARCHIVOS not in a:
+            continue
+        url = _absoluta(a, base)
+        if not url:
+            continue
+        url, esquema = _a_https_mismo_host(url, base)
+        etiqueta = _limpiar(m.group("ltxt"))
+
+        mp = SAGYP_PRODUCTO.search(etiqueta)
+        mf = SAGYP_FECHA.search(etiqueta)
+        fecha = None
+        if mf:
+            try:
+                fecha = datetime(int(mf.group(3)), int(mf.group(2)),
+                                 int(mf.group(1)))
+            except ValueError:
+                fecha = None
+
+        it = {
+            "familia": "Estimaciones agricolas",
+            "producto": mp.group(1).lower() if mp else "archivo",
+            "etiqueta": etiqueta,
+            "anio": fecha.year if fecha else anio_hoja,
+            "orden": None,
+            "periodo": None,
+            "periodo_incierto": True,
+            "url": url,
+            "ext": ext,
+            "fecha_en_la_agenda": agenda,
+        }
+        if mp and fecha:
+            periodo = f"{fecha:%Y-%m-%d}"
+            it.update(orden=fecha.month * 100 + fecha.day, periodo=periodo,
+                      periodo_incierto=False)
+            if agenda and agenda != periodo:
+                it["agenda_distinta_de_etiqueta"] = True
+        if _roto(a):
+            it["href_roto_en_la_fuente"] = True
+        if esquema:
+            it["esquema_corregido_por_guarismo"] = "http->https"
+        salida.append(it)
+    return salida
+
+
 ETIQUETADORES = {
     "hacienda": etiquetar_hacienda,
     "finanzas": etiquetar_finanzas,
@@ -941,6 +1104,7 @@ ETIQUETADORES = {
     "deuda_mens_calendario": etiquetar_deuda_mens_calendario,
     "titulos_estructura": etiquetar_titulos_estructura,
     "deuda_ant": etiquetar_deuda_ant,
+    "sagyp": etiquetar_sagyp,
 }
 
 
@@ -962,6 +1126,51 @@ def seleccionar(items, ventana=VENTANA):
         lista.sort(key=lambda x: (x["anio"], x["orden"]), reverse=True)
         elegidos.extend(lista[:ventana])
     return elegidos
+
+
+def paginas_de(fuente, cfg, ahora):
+    """Las paginas a mirar de una fuente: [(clave_estado, url, mes)].
+
+    Siete de ocho fuentes son UNA pagina y devuelven exactamente lo de antes:
+    la clave f"{fuente}_pagina" y la URL de FUENTES.
+
+    Con paginas_por_mes=N se miran los ultimos N meses, en hora de Buenos
+    Aires, cada uno con SU clave. Asi el cambio de mes no se confunde con una
+    publicacion, y un reemplazo del informe del mes pasado se sigue viendo.
+    El mes sale del reloj de la corrida: se resuelve solo, nadie lo toca.
+    """
+    n = cfg.get("paginas_por_mes")
+    if not n:
+        return [(f"{fuente}_pagina", cfg["url"], None)]
+    hoy = ahora.astimezone(ARG)
+    anio, mes, salida = hoy.year, hoy.month, []
+    for _ in range(int(n)):
+        m = f"{anio:04d}-{mes:02d}"
+        salida.append((f"{fuente}_pagina_{m}", f"{cfg['url']}?mes={m}", m))
+        anio, mes = (anio, mes - 1) if mes > 1 else (anio - 1, 12)
+    return salida
+
+
+def firma_listado(items):
+    """sha256 de la LISTA publicada: pares (url, etiqueta), ordenados.
+
+    Incluye los inciertos: un informe nuevo que no resuelve tambien es un
+    cambio del listado, y tiene que quedar la pagina de ese dia.
+    """
+    pares = sorted(f"{i.get('url')}\t{i.get('etiqueta')}" for i in items)
+    return hashlib.sha256("\n".join(pares).encode("utf-8")).hexdigest()
+
+
+def _sin_repetidos(items):
+    """El mismo link listado dos veces cuenta una. Solo para fuentes de varias
+    paginas: en las de una pagina no se toca nada de lo que ya andaba."""
+    vistos, salida = set(), []
+    for it in items:
+        k = (it.get("url"), it.get("etiqueta"))
+        if k not in vistos:
+            vistos.add(k)
+            salida.append(it)
+    return salida
 
 
 def _slug(txt, n):
@@ -1228,92 +1437,130 @@ def main(argv=None):
     entradas, ok, nuevos, huecos, inciertos = [], 0, 0, 0, 0
 
     for fuente, cfg in sorted(fuentes.items()):
-        capturado = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        # --- 1. la(s) pagina(s), que prueban que URL era la oficial hoy ---
+        #
+        # Siete de ocho fuentes son UNA pagina: este bucle da una sola vuelta
+        # y hace exactamente lo de antes. SAGyP son dos (mes en curso y mes
+        # anterior), cada una con su clave de estado. Ver paginas_de().
+        items, paginas_ok, ent_pag = [], 0, None
+        for cl_pag, url_pag, mes_pag in paginas_de(fuente, cfg, ahora):
+            capturado = datetime.now(timezone.utc).isoformat(timespec="seconds")
+            try:
+                pagina_b, headers, url_final = bajar(url_pag, "html")
+            except Exception as e:
+                huecos += 1
+                entradas.append({"fuente": fuente, "url": url_pag,
+                                 "capturado_utc": capturado,
+                                 "error": f"{type(e).__name__}: {e}"})
+                print(f"   [mecD] {fuente:<22} HUECO (pagina) — {type(e).__name__}: {e}")
+                continue
 
-        # --- 1. la pagina, que es la prueba de que URL era la oficial hoy ---
-        try:
-            pagina_b, headers, url_final = bajar(cfg["url"], "html")
-        except Exception as e:
-            huecos += 1
-            entradas.append({"fuente": fuente, "url": cfg["url"],
-                             "capturado_utc": capturado,
-                             "error": f"{type(e).__name__}: {e}"})
-            print(f"   [mecD] {fuente:<22} HUECO (pagina) — {type(e).__name__}: {e}")
+            pagina = pagina_b.decode("utf-8", errors="replace")
+            # El etiquetador corre ANTES de decidir si la pagina cambio: el
+            # gatillo por listado necesita la lista. Es una funcion pura de la
+            # pagina; correrla antes no cambia nada para las otras fuentes.
+            items_pag = ETIQUETADORES[cfg["etiquetador"]](pagina, url_pag)
+            sha_pag = hashlib.sha256(pagina_b).hexdigest()
+            prev = estado.get(cl_pag) or {}
+            previo = prev.get("sha256")
+            mtime = modified_time(pagina)
+            firma = (firma_listado(items_pag)
+                     if cfg.get("gatillo") == "listado" else None)
+
+            # LA PAGINA NO SE GATILLA POR HASH — descubierto el 7-sep-2026.
+            #
+            # Dos capturas separadas por NUEVE MINUTOS dieron el mismo tamaño
+            # exacto (50.794 y 45.258 bytes) y sha256 distinto, con el
+            # article:modified_time sin moverse. Las paginas de argentina.gob.ar
+            # reserializan en cada render.
+            #
+            # Gatillar por hash tendria dos consecuencias, y la segunda es grave:
+            #   1. se archivaria la pagina todos los dias, para siempre;
+            #   2. la serie de PUNTUALIDAD quedaria envenenada. Si "la pagina
+            #      cambio" pasa todos los dias, el dia que Finanzas publique la
+            #      deuda del II-2026 ese cambio no se distingue del ruido. Se
+            #      pierde justo lo que el modulo venia a medir.
+            #
+            # Es la regla que ya estaba escrita para el icc_op_art15: el hash solo
+            # no declara revision. Manda lo que el CMS DECLARA. El hash se sigue
+            # registrando siempre, y la reserializacion queda anotada como lo que
+            # es: una conducta medida de la fuente.
+            #
+            # GATILLO POR LISTADO (15-sep-2026): si la fuente lo declara, manda
+            # la firma de la lista publicada, no el hash ni el modified_time.
+            # Un servidor que reserializa no la mueve; un informe nuevo, si.
+            prev_mt = prev.get("article_modified_time")
+            if previo is None:
+                cambio_pag, motivo = True, "primera captura"
+            elif firma is not None:
+                cambio_pag = (firma != prev.get("firma_listado"))
+                motivo = "listado (la pagina no declara modified_time)"
+            elif mtime:
+                cambio_pag = (mtime != prev_mt)
+                motivo = "article_modified_time"
+            else:
+                # Sin fecha declarada no queda otra que el hash, y se dice.
+                cambio_pag = (sha_pag != previo)
+                motivo = "hash (la pagina no declara modified_time)"
+            reserializa = (sha_pag != previo) and not cambio_pag
+
+            ent_pag = {
+                "fuente": fuente, "tipo": "pagina", "url": url_pag,
+                "descripcion": cfg["desc"], "organismo": cfg["organismo"],
+                "capturado_utc": capturado, "bytes": len(pagina_b),
+                "sha256": sha_pag, "http_date": headers.get("Date"),
+                "last_modified": headers.get("Last-Modified"),
+                "etag": headers.get("ETag"),
+                "content_type": headers.get("Content-Type"),
+                "article_modified_time": mtime,
+                "cambio": cambio_pag,
+                "motivo_cambio": motivo,
+                # El binario es distinto pero la fuente no declaro publicacion:
+                # es reserializacion, no revision. Se mide, no se archiva.
+                "reserializa": reserializa,
+            }
+            if firma is not None:
+                ent_pag["firma_listado"] = firma
+                ent_pag["mes_listado"] = mes_pag
+                ent_pag["claves_listadas"] = len(items_pag)
+            if cambio_pag:
+                ent_pag["objeto"] = guardar(s3, bucket, sello, ahora, cl_pag,
+                                            pagina_b, "html", url_pag,
+                                            capturado, sha_pag, seco)
+                if not seco:
+                    estado[cl_pag] = {"sha256": sha_pag, "objeto": ent_pag["objeto"],
+                                      "article_modified_time": mtime,
+                                      "visto_utc": capturado}
+                    if firma is not None:
+                        estado[cl_pag]["firma_listado"] = firma
+                nuevos += 1
+                if firma is not None:
+                    print(f"   [mecD] {cl_pag:<30} {'NUEVO  →' if previo else 'PRIMERA→'} "
+                          f"{len(pagina_b):>8} bytes  claves={len(items_pag)}  ({motivo})")
+                else:
+                    print(f"   [mecD] {cl_pag:<30} {'NUEVO  →' if previo else 'PRIMERA→'} "
+                          f"{len(pagina_b):>8} bytes  mod={mtime}  ({motivo})")
+            else:
+                ent_pag["objeto"] = prev.get("objeto")
+                if firma is not None:
+                    extra = "  [reserializa: mismo listado, otro hash]" if reserializa else ""
+                    print(f"   [mecD] {cl_pag:<30} sin cambios {len(pagina_b):>8} bytes  "
+                          f"claves={len(items_pag)}{extra}")
+                else:
+                    extra = "  [reserializa: mismo mod, otro hash]" if reserializa else ""
+                    print(f"   [mecD] {cl_pag:<30} sin cambios {len(pagina_b):>8} bytes  "
+                          f"mod={mtime}{extra}")
+            ok += 1
+            entradas.append(ent_pag)
+            items.extend(items_pag)
+            paginas_ok += 1
+
+        if not paginas_ok:
             continue
-
-        pagina = pagina_b.decode("utf-8", errors="replace")
-        sha_pag = hashlib.sha256(pagina_b).hexdigest()
-        cl_pag = f"{fuente}_pagina"
-        prev = estado.get(cl_pag) or {}
-        previo = prev.get("sha256")
-        mtime = modified_time(pagina)
-
-        # LA PAGINA NO SE GATILLA POR HASH — descubierto el 7-sep-2026.
-        #
-        # Dos capturas separadas por NUEVE MINUTOS dieron el mismo tamaño
-        # exacto (50.794 y 45.258 bytes) y sha256 distinto, con el
-        # article:modified_time sin moverse. Las paginas de argentina.gob.ar
-        # reserializan en cada render.
-        #
-        # Gatillar por hash tendria dos consecuencias, y la segunda es grave:
-        #   1. se archivaria la pagina todos los dias, para siempre;
-        #   2. la serie de PUNTUALIDAD quedaria envenenada. Si "la pagina
-        #      cambio" pasa todos los dias, el dia que Finanzas publique la
-        #      deuda del II-2026 ese cambio no se distingue del ruido. Se
-        #      pierde justo lo que el modulo venia a medir.
-        #
-        # Es la regla que ya estaba escrita para el icc_op_art15: el hash solo
-        # no declara revision. Manda lo que el CMS DECLARA. El hash se sigue
-        # registrando siempre, y la reserializacion queda anotada como lo que
-        # es: una conducta medida de la fuente.
-        prev_mt = prev.get("article_modified_time")
-        if previo is None:
-            cambio_pag, motivo = True, "primera captura"
-        elif mtime:
-            cambio_pag = (mtime != prev_mt)
-            motivo = "article_modified_time"
-        else:
-            # Sin fecha declarada no queda otra que el hash, y se dice.
-            cambio_pag = (sha_pag != previo)
-            motivo = "hash (la pagina no declara modified_time)"
-        reserializa = (sha_pag != previo) and not cambio_pag
-
-        ent_pag = {
-            "fuente": fuente, "tipo": "pagina", "url": cfg["url"],
-            "descripcion": cfg["desc"], "organismo": cfg["organismo"],
-            "capturado_utc": capturado, "bytes": len(pagina_b),
-            "sha256": sha_pag, "http_date": headers.get("Date"),
-            "last_modified": headers.get("Last-Modified"),
-            "etag": headers.get("ETag"),
-            "content_type": headers.get("Content-Type"),
-            "article_modified_time": mtime,
-            "cambio": cambio_pag,
-            "motivo_cambio": motivo,
-            # El binario es distinto pero la fuente no declaro publicacion:
-            # es reserializacion, no revision. Se mide, no se archiva.
-            "reserializa": reserializa,
-        }
-        if cambio_pag:
-            ent_pag["objeto"] = guardar(s3, bucket, sello, ahora, cl_pag,
-                                        pagina_b, "html", cfg["url"],
-                                        capturado, sha_pag, seco)
-            if not seco:
-                estado[cl_pag] = {"sha256": sha_pag, "objeto": ent_pag["objeto"],
-                                  "article_modified_time": mtime,
-                                  "visto_utc": capturado}
-            nuevos += 1
-            print(f"   [mecD] {cl_pag:<30} {'NUEVO  →' if previo else 'PRIMERA→'} "
-                  f"{len(pagina_b):>8} bytes  mod={mtime}  ({motivo})")
-        else:
-            ent_pag["objeto"] = prev.get("objeto")
-            extra = "  [reserializa: mismo mod, otro hash]" if reserializa else ""
-            print(f"   [mecD] {cl_pag:<30} sin cambios {len(pagina_b):>8} bytes  "
-                  f"mod={mtime}{extra}")
-        ok += 1
-        entradas.append(ent_pag)
+        if cfg.get("paginas_por_mes"):
+            items = _sin_repetidos(items)
 
         # --- 2. los archivos ---
-        items = ETIQUETADORES[cfg["etiquetador"]](pagina, cfg["url"])
         raros = [i for i in items if i["periodo_incierto"]]
         inciertos += len(raros)
         for r in raros:
@@ -1394,7 +1641,8 @@ def main(argv=None):
                               "anio_en_el_nombre", "fecha_en_el_nombre",
                               "esquema_corregido_por_guarismo",
                               "unidad_declarada", "fecha_en_la_celda", "producto_no_canonico",
-                              "conflicto_celda_vs_etiqueta"):
+                              "conflicto_celda_vs_etiqueta",
+                              "fecha_en_la_agenda", "agenda_distinta_de_etiqueta"):
                     if extra in it:
                         entrada[extra] = it[extra]
                 if ufin and ufin != it["url"]:
@@ -1427,7 +1675,8 @@ def main(argv=None):
                 for extra in ("href_roto_en_la_fuente", "etiqueta_corregida",
                               "anio_en_el_nombre", "fecha_en_el_nombre",
                               "esquema_corregido_por_guarismo",
-                              "conflicto_celda_vs_etiqueta"):
+                              "conflicto_celda_vs_etiqueta",
+                              "fecha_en_la_agenda", "agenda_distinta_de_etiqueta"):
                     if extra in it:
                         entrada[extra] = it[extra]
                 huecos += 1
