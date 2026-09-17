@@ -50,3 +50,12 @@ jobs:
             git push
             echo "Publicado."
           fi
+
+      # Comprueba que cada sellos/<fecha>.json sea el archivo que prueba su .ots
+      # (ots info, sin red). Va DESPUÉS de publicar: la raíz de hoy queda
+      # publicada aunque esto falle. Si falla, la corrida queda en ROJO.
+      # Hoy y ayer pueden estar pendientes en Bitcoin sin que sea falla.
+      # Por qué existe: entre el 20-jul y el 16-sep-2026 el .json a la vista no
+      # era el que probaba su .ots en 58 días, y nada lo detectó.
+      - name: Verificar los sellos publicados
+        run: python verificar_sellos.py
