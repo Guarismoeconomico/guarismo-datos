@@ -89,6 +89,17 @@ EL LOG DICE QUE URL RESOLVIO — 15-sep-2026
     el segundo, el renglon se veia igual. Las entradas de URL plana no
     cambian ni un caracter.
 
+EL WASDE SE FUE EL MISMO DIA QUE ENTRO — 18-sep-2026
+    La entrada usda_wasde bajaba bien desde el navegador y desde las
+    herramientas del asistente, y el runner de GitHub recibio 403 del USDA.
+    Son clientes distintos y el unico que cuenta es el que captura.
+    El modulo hizo lo correcto: un 403 no es "no esta", asi que NO retrocedio
+    al WASDE del mes anterior y dejo hueco fechado. Fue la primera prueba en
+    produccion del arreglo del retroceso.
+    La entrada se saco para no dejar una alarma sonando todas las noches.
+    Vuelve por otra puerta (el archivo oficial en Cornell), y esa puerta se
+    prueba DESDE EL RUNNER, no desde el navegador.
+
 EL PRIMER DATO NO ARGENTINO — 17-sep-2026
     noaa_roni y noaa_oni son de la NOAA. Entran aca por la misma razon que el
     REM del BCRA: son archivos de URL fija que la fuente REESCRIBE, y lo unico
@@ -684,27 +695,6 @@ ARCHIVOS = {
                 "con la que esta escrita toda la literatura anterior. Trae TOTAL y "
                 "ANOM por trimestre movil desde 1950.",
     },
-    # --- USDA / WAOB: el WASDE. Cableado el 17-sep-2026. --------------------
-    # El informe que mueve los precios de los granos. Trae a la Argentina en
-    # todas las tablas (trigo, maiz, soja) y, en cada edicion, la estimacion
-    # del mes anterior AL LADO de la nueva: la revision viene escrita adentro.
-    # Dominio publico -> redistribuible.
-    #
-    # CALENDARIO: 12 fechas al año, a las 12:00 ET, y el propio PDF anuncia
-    # las siguientes ("In 2026 the WASDE report will be released on Oct 9,
-    # Nov 10, and Dec 10"). Otra fuente que promete por escrito.
-    #
-    # NOMBRE: wasde{MMAA}.pdf, sin separador. Verificado sobre wasde0926.pdf,
-    # que es el WASDE-675 del 11-sep-2026. Hasta el dia de la publicacion, el
-    # mes corriente no existe y se resuelve al anterior, que ya esta capturado.
-    "usda_wasde": {
-        "url": "https://www.usda.gov/oce/commodity/wasde/wasde{mesaa}.pdf",
-        "ext": "pdf",
-        "desc": "WASDE del USDA: oferta y demanda mundial de granos, oleaginosas y "
-                "algodon, con la Argentina en todas las tablas. Cada edicion muestra "
-                "la proyeccion del mes anterior junto a la nueva. El PDF anuncia las "
-                "fechas siguientes.",
-    },
 }
 
 # Tipo de contenido por extension. Se declara al subir a R2 para que el objeto
@@ -973,6 +963,8 @@ def urls_candidatas(url):
           {dia}  → ica_cuadros_20_08_26.xls    (dia de publicacion mensual)
           {mes}  → sh_ipc_08_26.xls            (mes de publicacion mensual)
           {mesaa}→ wasde0926.pdf               (igual que {mes}, pero PEGADO)
+        Hoy NINGUNA entrada usa {mesaa}: la del WASDE salio el 18-sep-2026
+        (ver abajo). El patron queda probado, listo para cuando vuelva.
         Dejar esas fechas escritas a mano significaria que el modulo empieza a
         devolver 404 hasta que alguien se acuerde de editarlo. Eso es
         mantenimiento manual, y en este proyecto lo que no es automatico no va.
