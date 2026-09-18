@@ -112,6 +112,64 @@ MOTOR COMUN, ETIQUETADOR POR FUENTE
         https://www.argentina.gob.ar/sitio/areas/estimaciones/... — una URL de
         otro organismo. Lo encontro la lectura antes de cablear, no un hueco.
 
+    (8) METADATOS DE R2 EN ASCII — BCRA, 15-sep-2026.
+        R2 (S3) rechaza metadatos con caracteres no-ASCII: botocore corta con
+        ParamValidationError antes de mandar nada. Probado con un stub, sin red.
+        El caso real: ITCMSerie_metodología_abr_16.xls, con tilde en la URL.
+        Sin esto, ese archivo quedaria HUECO para siempre con un error que no
+        dice nada de la fuente. guardar() codifica la URL de los metadatos solo
+        si hace falta: las URLs ASCII de siempre pasan intactas. El manifiesto
+        sigue guardando la URL tal cual la publico la fuente.
+
+    (9) LICITACIONES — 17-sep-2026.
+        Dos paginas de Finanzas: colocaciones de deuda y el cronograma 2026.
+
+        COLOCACIONES TIENE VENTANA MOVIL, y eso la vuelve IRRECUPERABLE:
+          08-sep-2026  filas 31-07-2026 y 30-04-2026 (colocaciones_31-5-26.xlsx)
+          17-sep-2026  filas 31-08-2026 (..._preliminar.xlsx) y 31-07-2026
+        La pagina se modifico el 11-sep y el corte de abril DESAPARECIO del
+        listado. Los años cerrados quedan con un solo corte, al 31-12. Cada
+        corte parcial vive unas semanas. Un caso: HIPOTESIS de ventana de dos.
+
+    (10) EL NOMBRE DEL ARCHIVO NO DECIDE EL PERIODO — NI PARA VETARLO.
+        Regla 2 completa: el periodo sale de la PAGINA. Si el nombre del
+        archivo trae otra fecha, se ANOTA (conflicto_celda_vs_nombre), suena
+        en el log y el archivo SE GUARDA con la fecha de la pagina.
+        Si se contradicen DOS TEXTOS DE LA PAGINA (celda contra etiqueta),
+        sigue siendo incierto, como en Datos Anteriores.
+        Por que: lo incierto no se captura en NINGUN modo — tampoco en
+        backfill —, y en una pagina con ventana movil eso es perdida segura.
+        El caso real fue la fila 30-04-2026 con colocaciones_31-5-26.xlsx.
+
+    (11) UN ETIQUETADOR QUE FALLA NO TIRA ABAJO A LAS DEMAS FUENTES.
+        Hasta el 17-sep-2026, una excepcion en el etiquetador de una fuente
+        cortaba la corrida entera de la mecanica D. Ahora esa fuente queda
+        HUECO (etiquetador) y las otras siguen. La pagina se archiva igual por
+        su modified_time; las de gatillo por listado no, porque su gatillo ES
+        la lista.
+
+    (12) NOTICIAS DE FINANZAS — 17-sep-2026. Tres cosas nuevas, todas por
+        configuracion de la fuente:
+
+        paginas_fijas: N   el listado se pagina con ?page=N. Se miran las N
+                           primeras, cada una con su clave de estado.
+        captura: "nuevas"  una noticia no se revisa: nace y queda. Se baja lo
+                           que TODAVIA NO ESTA en el estado, no una ventana.
+                           Bajar las dos ultimas todos los dias seria gastar
+                           pedidos contra el Estado para traer lo mismo.
+        it["id"]           la identidad de una noticia es su slug, no su
+                           fecha: hay varias del mismo tipo el mismo dia. El
+                           id entra en la clave sin pisar el periodo.
+
+        EL LISTADO TRAE LA HORA: <time datetime='2026-09-11 17:18:06'>. La
+        fecha sale de ahi (es dato de la pagina, no del nombre) y la hora
+        queda aparte, en hora_en_la_pagina. Con eso la puntualidad del Tesoro
+        se mide con hora y no solo con dia.
+
+        LO QUE NO HACE: no entra adentro de cada noticia. Los PDF colgados de
+        una noticia son otro nivel y van en otra vuelta; la noticia archivada
+        prueba cuales colgaba.
+
 LO QUE NO HACE
     No descomprime los .zip ni los .rar del fiscal. Se archiva el objeto que
     publico el organismo, tal cual. Descomprimir seria producir un artefacto
@@ -128,6 +186,7 @@ import os
 import re
 import sys
 import time
+from urllib.parse import quote
 from datetime import datetime, timedelta, timezone
 
 import requests
@@ -327,6 +386,84 @@ FUENTES = {
         "organismo": "Secretaria de Agricultura, Ganaderia y Pesca",
         "gatillo": "listado",
         "paginas_por_mes": 2,
+    },
+
+    # --- BCRA. Tres paginas de WordPress. Reconocidas el 15-sep-2026. ---
+    #
+    # Las tres declaran article:modified_time, asi que el gatillo es el de
+    # siempre. Sus links empiezan con "/": sin el arreglo (7) de _absoluta()
+    # se habrian armado sobre argentina.gob.ar.
+    "bcra_calendario_informes": {
+        # LA FECHA PROMETIDA DEL BCRA, escrita por la fuente. El propio sitio
+        # dice que la pagina se actualiza cuando se confirman o REPROGRAMAN
+        # fechas: cada version que se edita se pierde. No tiene archivos: la
+        # pagina ES el objeto. Creada 22-abr-2026, modificada 06-may-2026.
+        "url": "https://www.bcra.gob.ar/calendario-de-informes/",
+        "desc": "BCRA — calendario de informes (fechas previstas de publicacion)",
+        "etiquetador": "solo_pagina",
+        "organismo": "Banco Central de la Republica Argentina",
+    },
+    "bcra_rem": {
+        # La pagina del REM se REESCRIBE cada mes: resumen ejecutivo nuevo y
+        # links a la edicion nueva. Los siete archivos ya los captura la
+        # mecanica B (rem_*): aca se guarda la pagina, que prueba cuales
+        # estaban linkeados y a que hora la toco el BCRA (4-sep-2026 17:51).
+        "url": "https://www.bcra.gob.ar/relevamiento-expectativas-mercado-rem/",
+        "desc": "BCRA — pagina del REM (resumen ejecutivo y archivos vigentes)",
+        "etiquetador": "solo_pagina",
+        "organismo": "Banco Central de la Republica Argentina",
+    },
+    "bcra_itcrm_metodologias_ant": {
+        # Las metodologias VIEJAS del ITCRM, que el BCRA publica el mismo.
+        # Historia cerrada (2016 y 2017): cadencia archivo, como Datos
+        # Anteriores. La pagina se mira todos los dias; los 4 archivos van
+        # solo con --backfill (Clase B).
+        "url": "https://www.bcra.gob.ar/metodologias-anteriores-itcrm/",
+        "desc": "BCRA — metodologias anteriores del ITCRM (PDF y serie)",
+        "etiquetador": "itcrm_metodologias",
+        "organismo": "Banco Central de la Republica Argentina",
+        "cadencia": "archivo",
+    },
+
+    # --- Finanzas, Licitaciones. Reconocidas el 8 y el 17-sep-2026. ---
+    #
+    # COLOCACIONES: compilado anual (31-12 de cada año cerrado) + cortes
+    # parciales del año en curso, que ROTAN. Ver (9) arriba. Book node 79900,
+    # slug viejo sin guiones. Ventana 2 por producto: los dos cortes parciales
+    # vigentes y los dos ultimos cierres anuales, todos los dias.
+    "finanzas_colocaciones": {
+        "url": "https://www.argentina.gob.ar/economia/finanzas/deudapublica/colocacionesdedeuda",
+        "desc": "Finanzas — colocaciones de deuda (cierres anuales y cortes parciales del año)",
+        "etiquetador": "colocaciones",
+        "organismo": "Secretaria de Finanzas",
+    },
+    # CRONOGRAMA 2026: la promesa escrita de cada llamado y licitacion. El PDF
+    # se REEMPLAZA en el lugar (el de 2025 vivia en /2022/06/ con fecha
+    # interna de enero de 2025) y la pagina no mueve su modified_time: la
+    # unica señal es el hash del archivo, que se baja todos los dias.
+    # La pagina es por año: cuando exista la de 2027 se suma como otra fuente.
+    # NOTICIAS: el listado de Finanzas, que es donde salen el llamado y el
+    # resultado de cada licitacion. El cronograma dice lo PROMETIDO; esto es
+    # lo OBSERVADO, con hora. Sin article:modified_time -> gatillo por listado,
+    # como SAGyP. Cada pagina MUESTRA 16 noticias, pero ?page=1 no empieza en
+    # la 17: medido el 17-sep-2026, las paginas 0 y 1 comparten 9 y entre las
+    # dos se ven 23 distintas. El paginador avanza de a 7 (hipotesis de un
+    # caso). Con dos paginas alcanza de sobra para no perder nada entre
+    # corridas diarias, y lo repetido cuenta una vez.
+    "finanzas_noticias": {
+        "url": "https://www.argentina.gob.ar/economia/finanzas/noticias",
+        "desc": "Finanzas — listado de noticias (llamados y resultados de licitacion)",
+        "etiquetador": "noticias_finanzas",
+        "organismo": "Secretaria de Finanzas",
+        "gatillo": "listado",
+        "paginas_fijas": 2,
+        "captura": "nuevas",
+    },
+    "finanzas_licit_cronograma": {
+        "url": "https://www.argentina.gob.ar/economia/finanzas/licitaciones-de-letras-y-bonos-del-tesoro/cronograma-2026",
+        "desc": "Finanzas — cronograma 2026 de llamados y licitaciones del Tesoro",
+        "etiquetador": "cronograma_licitaciones",
+        "organismo": "Secretaria de Finanzas",
     },
 }
 
@@ -1096,6 +1233,311 @@ def etiquetar_sagyp(pagina, base):
     return salida
 
 
+def etiquetar_solo_pagina(pagina, base):
+    """La pagina es el objeto. No hay archivos que capturar desde aca.
+
+    Para el calendario, porque no linkea ninguno. Para la pagina del REM,
+    porque sus siete archivos ya los captura la mecanica B: bajarlos otra vez
+    seria duplicar objetos y pedidos contra el BCRA todos los dias. La lista
+    de lo que la pagina linkeaba queda probada en la pagina archivada.
+    """
+    return []
+
+
+MES3 = {"ene": 1, "feb": 2, "mar": 3, "abr": 4, "may": 5, "jun": 6,
+        "jul": 7, "ago": 8, "sep": 9, "set": 9, "oct": 10, "nov": 11, "dic": 12}
+
+
+def etiquetar_itcrm_metodologias(pagina, base):
+    """<h4> año · el TEXTO DEL LINK es el mes · la EXTENSION dice el producto.
+
+    LA PAGINA, TAL CUAL ESTA AL 15-sep-2026
+        <h4>2017</h4>  Marzo (PDF) · Marzo (XLS)
+        <h4>2016</h4>  Abril (PDF) · Abril (XLS)
+
+    El producto sale de la extension y no de la etiqueta, porque las dos
+    etiquetas de cada año son identicas ("Marzo" y "Marzo"). Con un solo
+    producto, el PDF y la planilla del mismo mes escribirian sobre la misma
+    clave. La extension no es un periodo: la regla 2 sigue en pie.
+
+    DOS SEÑALES
+        El nombre trae _mar_17 / _abr_16. No es fuente del periodo y tampoco
+        lo veta: si lo contradice, se anota y suena (regla 10). Hoy coinciden
+        los cuatro.
+    """
+    anio, salida = None, []
+    for tipo, a, b in eventos(pagina):
+        if tipo == "h":
+            anio = int(b) if (a == 4 and re.fullmatch(r"(19|20)\d{2}", b or "")) else None
+            continue
+        if tipo != "link":
+            continue
+        ext = _ext_de(a)
+        if ext not in EXTENSIONES:
+            continue
+        url = _absoluta(a, base)
+        if not url:
+            continue
+        url, esquema = _a_https_mismo_host(url, base)
+        etiqueta = (b or "").strip()
+        mes = MESES.get(etiqueta.lower())
+        producto = "metodologia" if ext == "pdf" else ("serie" if ext in ("xls", "xlsx", "csv") else ext)
+        ok = bool(anio and mes)
+        it = {
+            "familia": "Metodologias anteriores ITCRM",
+            "producto": producto,
+            "etiqueta": etiqueta,
+            "anio": anio,
+            "orden": mes if ok else None,
+            "periodo": f"{anio}-{mes:02d}" if ok else None,
+            "periodo_incierto": not ok,
+            "url": url,
+            "ext": ext,
+        }
+        nombre = url.rsplit("/", 1)[-1].lower()
+        mn = re.search(r"_([a-z]{3})_(\d{2})\.[a-z0-9]+$", nombre)
+        if mn:
+            it["fecha_en_el_nombre"] = f"{mn.group(1)}_{mn.group(2)}"
+            if ok and (MES3.get(mn.group(1)) != mes or 2000 + int(mn.group(2)) != anio):
+                # Regla (10): el nombre no veta. Se anota, suena y se guarda
+                # con el periodo de la pagina.
+                it["conflicto_celda_vs_nombre"] = (
+                    f"pagina={anio}-{mes:02d} · nombre={mn.group(1)}_{mn.group(2)}")
+        if not url.isascii():
+            # Hecho de la fuente: publico el nombre con tilde. Ver (8).
+            it["url_no_ascii"] = True
+        if _roto(a):
+            it["href_roto_en_la_fuente"] = True
+        if esquema:
+            it["esquema_corregido_por_guarismo"] = "http->https"
+        salida.append(it)
+    return salida
+
+
+COLOC_FECHA = re.compile(r"^\s*(\d{1,2})-(\d{1,2})-((?:19|20)\d{2})\s*$")
+COLOC_NOMBRE = re.compile(r"(?<!\d)(\d{1,2})[-_](\d{1,2})[-_]((?:19|20)?\d{2})(?!\d)")
+ANIO_TXT = re.compile(r"\b((?:19|20)\d{2})\b")
+
+
+def etiquetar_colocaciones(pagina, base):
+    """Colocaciones de deuda: FECHA en la primera celda, AÑO en la segunda.
+
+    LA PAGINA, TAL CUAL ESTA AL 17-sep-2026
+        31-08-2026 | Operaciones en el año 2026 | colocaciones_31-08-26_preliminar.xlsx
+        31-07-2026 | Operaciones en el año 2026 | colocaciones_31-07-26_1.xlsx
+        31-12-2025 | Operaciones en el año 2025 | colocaciones_31-12-2025_0.xlsx
+        ... un cierre por año hasta 2020
+
+    DE DONDE SALE CADA COSA
+        periodo    la fecha de la PRIMERA CELDA (texto de la pagina).
+        producto   "anual" si la celda es 31-12; si no, "parcial". Asi la
+                   ventana guarda los dos cortes vivos Y los dos ultimos
+                   cierres, y un corte parcial reemplazado (preliminar ->
+                   definitivo) cae sobre la MISMA clave: es una revision.
+        estado     "preliminar" si el NOMBRE lo dice. Es un hecho de la
+                   fuente, no un periodo: va a estado_en_el_nombre.
+
+    DOS SEÑALES DE LA PAGINA
+        La segunda celda dice "Operaciones en el año AAAA". Si no es el año de
+        la celda, hay conflicto entre dos textos de la pagina: INCIERTO.
+
+    EL NOMBRE DEL ARCHIVO (regla 10)
+        Trae una fecha en cinco escrituras distintas (31-07-26, 31-12-2025,
+        31_12_2021, coloc_31_12_2020_ ...). Si contradice a la celda, se
+        anota en conflicto_celda_vs_nombre y el archivo SE GUARDA igual.
+
+    Una fila vale por un link (se consume al emitir), y el mismo link
+    repetido cuenta una vez.
+    """
+    celdas, salida, vistos = [], [], set()
+    for tipo, a, b in eventos(pagina):
+        if tipo == "fila":
+            celdas = []
+            continue
+        if tipo == "celda":
+            celdas.append(b or "")
+            continue
+        if tipo != "link":
+            continue
+        ext = _ext_de(a)
+        if ext not in EXTENSIONES:
+            continue
+        url = _absoluta(a, base)
+        if not url or url in vistos:
+            continue
+        vistos.add(url)
+        url, esquema = _a_https_mismo_host(url, base)
+        fila, celdas = celdas, []
+        desc = fila[1].strip() if len(fila) > 1 else ""
+        it = {
+            "familia": "Colocaciones de deuda", "producto": "archivo",
+            "etiqueta": desc or None, "anio": None, "orden": None,
+            "periodo": None, "periodo_incierto": True, "url": url, "ext": ext,
+        }
+        m = COLOC_FECHA.match(fila[0]) if fila else None
+        fecha = None
+        if m:
+            try:
+                fecha = datetime(int(m.group(3)), int(m.group(2)), int(m.group(1)))
+            except ValueError:
+                fecha = None
+        if fecha:
+            it["fecha_en_la_celda"] = f"{fecha:%Y-%m-%d}"
+            it.update(producto="anual" if (fecha.month, fecha.day) == (12, 31) else "parcial",
+                      anio=fecha.year, orden=fecha.month * 100 + fecha.day,
+                      periodo=f"{fecha:%Y-%m-%d}", periodo_incierto=False)
+            ma = ANIO_TXT.search(desc)
+            if ma and int(ma.group(1)) != fecha.year:
+                it.update(periodo=None, orden=None, periodo_incierto=True,
+                          conflicto_celda_vs_etiqueta=(
+                              f"celda={fecha:%Y-%m-%d} · descripcion={ma.group(1)}"))
+        nombre = url.rsplit("/", 1)[-1]
+        mn = COLOC_NOMBRE.search(nombre)
+        if mn:
+            it["fecha_en_el_nombre"] = mn.group(0)
+            if fecha and not it["periodo_incierto"]:
+                yy = int(mn.group(3))
+                yy = yy + 2000 if yy < 100 else yy
+                if (int(mn.group(1)), int(mn.group(2)), yy) != (fecha.day, fecha.month, fecha.year):
+                    it["conflicto_celda_vs_nombre"] = (
+                        f"celda={fecha:%Y-%m-%d} · nombre={mn.group(0)}")
+        if re.search(r"preliminar", nombre, re.I):
+            it["estado_en_el_nombre"] = "preliminar"
+        if _roto(a):
+            it["href_roto_en_la_fuente"] = True
+        if esquema:
+            it["esquema_corregido_por_guarismo"] = "http->https"
+        salida.append(it)
+    return salida
+
+
+def etiquetar_cronograma_licitaciones(pagina, base):
+    """El cronograma del año: un PDF VIGENTE, sin periodo que leer.
+
+    Mismo criterio que el calendario de publicaciones de Finanzas: periodo
+    "vigente" y clave estable, porque el archivo se REEMPLAZA en el lugar. La
+    serie de objetos es la historia de las versiones. El año sale del titulo
+    de la pagina ("Cronograma 2026") y va a anio_de_la_pagina.
+
+    Se reconoce por el texto del link ("Descargar cronograma") o por el
+    nombre (hoy calendario_prensa_0.pdf). Cualquier otro archivo que aparezca
+    queda incierto y suena.
+    """
+    mt = re.search(r"<title>\s*Cronograma\s+((?:19|20)\d{2})", pagina, re.I)
+    anio_pag = int(mt.group(1)) if mt else None
+    salida, vistos = [], set()
+    for tipo, a, b in eventos(pagina):
+        if tipo != "link":
+            continue
+        ext = _ext_de(a)
+        if ext not in EXTENSIONES:
+            continue
+        url = _absoluta(a, base)
+        if not url or url in vistos:
+            continue
+        vistos.add(url)
+        url, esquema = _a_https_mismo_host(url, base)
+        etiqueta = (b or "").strip()
+        nombre = url.rsplit("/", 1)[-1].lower()
+        es = ("cronograma" in etiqueta.lower() or "cronograma" in nombre
+              or "calendario" in nombre)
+        it = {
+            "familia": "Cronograma de licitaciones",
+            "producto": "cronograma" if es else (_slug(etiqueta, 12) or "archivo"),
+            "etiqueta": etiqueta, "anio": None, "orden": None, "periodo": None,
+            "periodo_incierto": True, "url": url, "ext": ext,
+        }
+        if es:
+            it.update(periodo="vigente", periodo_incierto=False, orden=1,
+                      anio=anio_pag or 0)
+            if anio_pag:
+                it["anio_de_la_pagina"] = anio_pag
+        if _roto(a):
+            it["href_roto_en_la_fuente"] = True
+        if esquema:
+            it["esquema_corregido_por_guarismo"] = "http->https"
+        salida.append(it)
+    return salida
+
+
+NOTICIA = re.compile(
+    r"<time\b[^>]*datetime=['\"](\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}:\d{2})['\"]", re.I)
+NOTICIA_LINK = re.compile(
+    r'<a\b[^>]*href="((?:https://www\.argentina\.gob\.ar)?/noticias/[^"#?]+)"(.*?)</a>',
+    re.S | re.I)
+NOTICIA_TITULO = re.compile(r"<h3[^>]*>(.*?)</h3>", re.S | re.I)
+NOTICIA_TIPO = (
+    ("llamado", re.compile(r"\bllamado\b", re.I)),
+    ("resultado", re.compile(r"\bresultado\b", re.I)),
+    ("conversion", re.compile(r"\bconversi[oó]n\b|\bcanje\b", re.I)),
+    ("precio", re.compile(r"\bcomunicaci[oó]n del precio\b", re.I)),
+)
+
+
+def etiquetar_noticias_finanzas(pagina, base):
+    """El listado de noticias: cada tarjeta trae FECHA CON HORA, titulo y slug.
+
+    LA TARJETA, TAL CUAL ESTA AL 17-sep-2026
+        <a href="/noticias/resultado-de-la-licitacion-...-12">
+          <time datetime='2026-09-11 17:18:06'>11 de septiembre de 2026</time>
+          <h3>Resultado de la licitacion por efectivo ...</h3>
+
+    DE DONDE SALE CADA COSA
+        periodo   la fecha del atributo datetime: dato de la pagina, legible
+                  por maquina, no el nombre de la URL.
+        hora      hora_en_la_pagina. Es lo que permite medir puntualidad del
+                  Tesoro con hora y no solo con dia.
+        producto  llamado / resultado / conversion / precio / otra, leido del
+                  TITULO. Lo que no es de licitacion entra como "otra": el
+                  listado es la evidencia de todo lo que publico Finanzas.
+        id        el slug. Hay varias noticias del mismo tipo el mismo dia,
+                  asi que el periodo no alcanza para identificar.
+
+    UNA NOTICIA ES UN OBJETO HTML: no tiene extension, y se archiva la pagina
+    entera. Los PDF que cuelguen de adentro son otro nivel.
+
+    Sin fecha legible queda incierto: no se archiva y suena.
+    """
+    salida, vistos = [], set()
+    for m in NOTICIA_LINK.finditer(pagina):
+        href, cuerpo = m.group(1), m.group(2)
+        url = _absoluta(_href(href), base)
+        if not url:
+            continue
+        url, esquema = _a_https_mismo_host(url, base)
+        slug = url.rstrip("/").rsplit("/", 1)[-1]
+        if slug in vistos:
+            continue
+        vistos.add(slug)
+        mt = NOTICIA.search(cuerpo)
+        mh = NOTICIA_TITULO.search(cuerpo)
+        titulo = _limpiar(mh.group(1)) if mh else ""
+        producto = "otra"
+        for nombre, rx in NOTICIA_TIPO:
+            if rx.search(titulo):
+                producto = nombre
+                break
+        it = {
+            "familia": "Noticias de Finanzas",
+            "producto": producto,
+            "etiqueta": titulo or None,
+            "id": slug,
+            "anio": None, "orden": None, "periodo": None, "periodo_incierto": True,
+            "url": url, "ext": "html",
+        }
+        if mt:
+            anio, mes, dia = (int(x) for x in mt.group(1).split("-"))
+            it.update(anio=anio, orden=mes * 100 + dia, periodo=mt.group(1),
+                      periodo_incierto=False,
+                      hora_en_la_pagina=f"{mt.group(1)}T{mt.group(2)}")
+        if _roto(href):
+            it["href_roto_en_la_fuente"] = True
+        if esquema:
+            it["esquema_corregido_por_guarismo"] = "http->https"
+        salida.append(it)
+    return salida
+
+
 ETIQUETADORES = {
     "hacienda": etiquetar_hacienda,
     "finanzas": etiquetar_finanzas,
@@ -1105,16 +1547,22 @@ ETIQUETADORES = {
     "titulos_estructura": etiquetar_titulos_estructura,
     "deuda_ant": etiquetar_deuda_ant,
     "sagyp": etiquetar_sagyp,
+    "solo_pagina": etiquetar_solo_pagina,
+    "itcrm_metodologias": etiquetar_itcrm_metodologias,
+    "colocaciones": etiquetar_colocaciones,
+    "cronograma_licitaciones": etiquetar_cronograma_licitaciones,
+    "noticias_finanzas": etiquetar_noticias_finanzas,
 }
 
 
 def seleccionar(items, ventana=VENTANA):
     """Las `ventana` ediciones mas nuevas de cada familia+producto.
 
-    Lo incierto NUNCA entra en la corrida normal: no se puede ordenar algo
-    cuyo periodo no se pudo leer, y meterlo "por las dudas" es exactamente
-    como se archiva un mes con la etiqueta de otro. Queda listado en el
-    manifiesto para que lo vea un humano, y lo levanta el backfill.
+    Lo incierto NUNCA entra: no se puede ordenar algo cuyo periodo no se pudo
+    leer, y meterlo "por las dudas" es exactamente como se archiva un mes con
+    la etiqueta de otro. Queda listado en el manifiesto para que lo vea un
+    humano. OJO (corregido el 17-sep-2026): el backfill TAMPOCO lo levanta;
+    este comentario decia que si. Por eso existe la regla (10).
     """
     grupos = {}
     for it in items:
@@ -1139,6 +1587,12 @@ def paginas_de(fuente, cfg, ahora):
     publicacion, y un reemplazo del informe del mes pasado se sigue viendo.
     El mes sale del reloj de la corrida: se resuelve solo, nadie lo toca.
     """
+    fijas = cfg.get("paginas_fijas")
+    if fijas:
+        # ?page=0 no existe: la primera es la URL pelada.
+        return [(f"{fuente}_pagina_{i}",
+                 cfg["url"] if i == 0 else f"{cfg['url']}?page={i}", None)
+                for i in range(int(fijas))]
     n = cfg.get("paginas_por_mes")
     if not n:
         return [(f"{fuente}_pagina", cfg["url"], None)]
@@ -1186,7 +1640,13 @@ def clave_de(fuente, it):
     """
     fam = _slug(it.get("familia"), 14) or "sinfamilia"
     prod = _slug(it.get("producto"), 12) or "archivo"
-    return f"{fuente}_{fam}_{it['periodo']}_{prod}"
+    clave = f"{fuente}_{fam}_{it['periodo']}_{prod}"
+    # Cuando la fuente publica varios documentos del mismo tipo el mismo dia
+    # (las noticias), el periodo no alcanza para identificar: se agrega el id
+    # que declara la fuente, que es su slug. Ninguna otra fuente lo usa.
+    if it.get("id"):
+        clave += "_" + _slug(it["id"], 28)
+    return clave
 
 
 # ---------------------------------------------------------------------------
@@ -1364,6 +1824,19 @@ def leer_estado(s3, bucket):
 # Corrida
 # ---------------------------------------------------------------------------
 
+def _url_ascii(url):
+    """La URL para los METADATOS de R2, que solo aceptan ASCII. Ver (8).
+
+    Si ya es ASCII se devuelve identica: las ocho fuentes anteriores al
+    15-sep-2026 no cambian ni un byte. Si no, se codifica en UTF-8 con %,
+    que es exactamente lo que manda requests al pedirla.
+    """
+    url = url or ""
+    if url.isascii():
+        return url
+    return quote(url, safe=":/?#[]@!$&'()*+,;=%~")
+
+
 def guardar(s3, bucket, sello, ahora, clave, datos, ext, url, capturado, sha,
             seco=False):
     nombre = f"{clave}_{sello}.{ext}"
@@ -1374,7 +1847,7 @@ def guardar(s3, bucket, sello, ahora, clave, datos, ext, url, capturado, sha,
         Bucket=bucket, Key=obj, Body=datos,
         ContentType=TIPOS.get(ext, "application/octet-stream"),
         Metadata={"sha256": sha, "origen": "boveda-mecanicad",
-                  "url": url[:900], "capturado-utc": capturado},
+                  "url": _url_ascii(url)[:900], "capturado-utc": capturado},
     )
     s3.put_object(
         Bucket=bucket, Key=obj + ".sha256",
@@ -1459,7 +1932,19 @@ def main(argv=None):
             # El etiquetador corre ANTES de decidir si la pagina cambio: el
             # gatillo por listado necesita la lista. Es una funcion pura de la
             # pagina; correrla antes no cambia nada para las otras fuentes.
-            items_pag = ETIQUETADORES[cfg["etiquetador"]](pagina, url_pag)
+            try:
+                items_pag = ETIQUETADORES[cfg["etiquetador"]](pagina, url_pag)
+                error_etq = None
+            except Exception as e:
+                # Ver (11): una fuente rota no tira abajo a las demas.
+                items_pag, error_etq = [], f"{type(e).__name__}: {e}"
+                huecos += 1
+                print(f"   [mecD] {fuente:<22} HUECO (etiquetador) — {error_etq}")
+                if cfg.get("gatillo") == "listado":
+                    entradas.append({"fuente": fuente, "url": url_pag,
+                                     "capturado_utc": capturado,
+                                     "error": f"etiquetador: {error_etq}"})
+                    continue
             sha_pag = hashlib.sha256(pagina_b).hexdigest()
             prev = estado.get(cl_pag) or {}
             previo = prev.get("sha256")
@@ -1519,6 +2004,8 @@ def main(argv=None):
                 # es reserializacion, no revision. Se mide, no se archiva.
                 "reserializa": reserializa,
             }
+            if error_etq:
+                ent_pag["error_etiquetador"] = error_etq
             if firma is not None:
                 ent_pag["firma_listado"] = firma
                 ent_pag["mes_listado"] = mes_pag
@@ -1557,7 +2044,9 @@ def main(argv=None):
 
         if not paginas_ok:
             continue
-        if cfg.get("paginas_por_mes"):
+        if cfg.get("paginas_por_mes") or cfg.get("paginas_fijas"):
+            # La misma noticia puede aparecer en dos paginas del listado si
+            # publican algo entre un pedido y el otro. Cuenta una vez.
             items = _sin_repetidos(items)
 
         # --- 2. los archivos ---
@@ -1572,6 +2061,11 @@ def main(argv=None):
             })
             print(f"   [mecD] {fuente:<22} etiqueta sin resolver: "
                   f"{r['etiqueta']!r} ({r['anio']}) — {r['url'].rsplit('/', 1)[-1]}")
+        for r in items:
+            if r.get("conflicto_celda_vs_nombre") and not r["periodo_incierto"]:
+                print(f"   [mecD] {fuente:<22} ⚠ la fecha del nombre no es la de la "
+                      f"pagina ({r['conflicto_celda_vs_nombre']}): se guarda con la "
+                      f"de la pagina — {r['url'].rsplit('/', 1)[-1]}")
 
         # CADENCIA "archivo": la pagina se mira todos los dias, los archivos
         # NO. Una pagina que solo guarda historia cerrada no tiene ediciones
@@ -1592,6 +2086,11 @@ def main(argv=None):
             ent_pag["cadencia"] = "archivo"
             ent_pag["archivos_listados"] = len(items)
             ent_pag["archivos_omitidos_en_normal"] = len(items)
+        elif cfg.get("captura") == "nuevas" and not backfill:
+            # Una noticia no se revisa: nace y queda. Se baja lo que todavia
+            # no esta en el estado; el resto ya esta archivado con su sello.
+            elegidos = [i for i in items if not i["periodo_incierto"]
+                        and clave_de(fuente, i) not in estado]
         else:
             elegidos = ([i for i in items if not i["periodo_incierto"]]
                         if backfill else seleccionar(items))
@@ -1642,7 +2141,10 @@ def main(argv=None):
                               "esquema_corregido_por_guarismo",
                               "unidad_declarada", "fecha_en_la_celda", "producto_no_canonico",
                               "conflicto_celda_vs_etiqueta",
-                              "fecha_en_la_agenda", "agenda_distinta_de_etiqueta"):
+                              "fecha_en_la_agenda", "agenda_distinta_de_etiqueta",
+                              "url_no_ascii", "conflicto_celda_vs_nombre",
+                              "estado_en_el_nombre", "anio_de_la_pagina",
+                              "hora_en_la_pagina", "id"):
                     if extra in it:
                         entrada[extra] = it[extra]
                 if ufin and ufin != it["url"]:
@@ -1676,7 +2178,10 @@ def main(argv=None):
                               "anio_en_el_nombre", "fecha_en_el_nombre",
                               "esquema_corregido_por_guarismo",
                               "conflicto_celda_vs_etiqueta",
-                              "fecha_en_la_agenda", "agenda_distinta_de_etiqueta"):
+                              "fecha_en_la_agenda", "agenda_distinta_de_etiqueta",
+                              "url_no_ascii", "conflicto_celda_vs_nombre",
+                              "estado_en_el_nombre", "anio_de_la_pagina",
+                              "hora_en_la_pagina", "id"):
                     if extra in it:
                         entrada[extra] = it[extra]
                 huecos += 1
