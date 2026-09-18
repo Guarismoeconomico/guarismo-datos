@@ -81,6 +81,57 @@ HUECOS, NO MENTIRAS
     Si un archivo falla, queda registrado en el manifiesto con su error y su
     fecha. Si fallan TODOS, el proceso termina en rojo y no sube nada.
 
+EL LOG DICE QUE URL RESOLVIO — 15-sep-2026
+    En las entradas con fecha en la URL ({anio}, {trim}, {dia}, {mes}, {mes3})
+    el renglon del log termina con el nombre del archivo que efectivamente se
+    bajo y con los candidatos descartados antes, agrupados por motivo. Antes
+    el seco no lo decia en ningun lado: si fallaba el primer candidato y pegaba
+    el segundo, el renglon se veia igual. Las entradas de URL plana no
+    cambian ni un caracter.
+
+EL PRIMER DATO NO ARGENTINO — 17-sep-2026
+    noaa_roni y noaa_oni son de la NOAA. Entran aca por la misma razon que el
+    REM del BCRA: son archivos de URL fija que la fuente REESCRIBE, y lo unico
+    que cambia es el contenido. El Niño manda sobre la cosecha argentina.
+
+UN ARCHIVO DESLISTADO — 17-sep-2026
+    La entrada coloc_deslistado_31_5_26 no es del INDEC: es
+    un archivo de Finanzas que su pagina dejo de listar. La mecanica D solo
+    ve lo listado; la B baja URLs fijas. Por eso vive aca.
+
+RETROCESO POR ERROR — diagnosticado y corregido el 15-sep-2026
+    Hasta esta version, bajar_resolviendo() pasaba al candidato siguiente
+    ante CUALQUIER error. Si el archivo del periodo vigente existia pero el
+    servidor fallaba tres veces seguidas (timeout, 5xx), se bajaba el del
+    periodo ANTERIOR, su hash difería del ultimo visto, y el log decia NUEVO.
+    Al dia siguiente, NUEVO otra vez. Un hipo del servidor disfrazado de
+    revision fuera de fecha.
+
+    AHORA se retrocede SOLO si el candidato NO ESTA (NoEsta: 404, o una
+    pagina HTML donde se esperaba un archivo). Cualquier otro error corta:
+    la entrada queda HUECO con corte_por_error=True y el motivo escrito.
+    Decision firme: un hueco fechado vale mas que un archivo viejo servido
+    como nuevo.
+
+    POR QUE ES SEGURO, medido y no supuesto:
+      INDEC  un archivo inexistente redirige a Error-Default con 2xx y HTML
+             -> NoEsta (verificado el 3-sep-2026).
+      BCRA   un archivo inexistente devuelve su pagina "No se encontraron
+             resultados", en la misma URL, sin redirigir (verificado en el
+             navegador el 15-sep-2026 con ...-sep-2026.pdf). Sea 404 o 200
+             con HTML, bajar() lo trata como NoEsta. NO es la pagina de
+             bloqueo con Transaction ID que el mismo sitio da para wp-json.
+      El codigo HTTP exacto del BCRA no se vio: el navegador no lo muestra.
+      Por los dos caminos posibles el resultado es el mismo.
+
+    El aviso "⚠ RETROCESO POR ERROR" queda en el codigo y NO deberia sonar
+    nunca. Si suena, el corte fallo: eso es el hallazgo.
+
+METADATOS EN ASCII — 15-sep-2026
+    R2 rechaza metadatos con caracteres no-ASCII (ParamValidationError, probado
+    con stub). Las 43 URLs de hoy son ASCII, asi que esto no cambia nada hoy.
+    Es el mismo arreglo que la mecanica D, puesto antes de que haga falta.
+
 VARIABLES DE ENTORNO
     R2_ENDPOINT, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY   (obligatorias)
     R2_BUCKET                                             (opcional, default guarismo-crudo)
@@ -98,6 +149,7 @@ import re
 import sys
 import time
 from datetime import datetime, timezone
+from urllib.parse import quote
 
 import requests
 
@@ -591,6 +643,68 @@ ARCHIVOS = {
                 "⚠️ Vive en sitioanterior.indec.gob.ar, la URL fragil: razon de mas "
                 "para hashearlo antes de que se caiga.",
     },
+    # --- Finanzas: un corte de colocaciones que la pagina DESLISTO. ---------
+    # Visto en colocacionesdedeuda el 08-sep-2026 (fila "30-04-2026"). El
+    # 11-sep la pagina lo saco del listado y el 17-sep el archivo SEGUIA en el
+    # servidor. Va aca, como URL fija, porque la mecanica D solo captura lo
+    # que la pagina lista. Clase B: se captura despues de publicado y despues
+    # de deslistado. Si un dia da HUECO con 404, lo borraron: eso es el dato.
+    # El nombre dice 31-5-26 y el contenido llega al 29-05-2026: la fila de la
+    # pagina decia 30-04-2026. Se guarda como lo que es, sin elegir fecha.
+    "coloc_deslistado_31_5_26": {
+        "url": "https://www.argentina.gob.ar/sites/default/files/"
+               "colocaciones_31-5-26.xlsx",
+        "ext": "xlsx",
+        "desc": "Colocaciones de deuda 2026, corte que la pagina rotulo 30-04-2026 "
+                "y retiro del listado el 11-sep-2026. Nombre: 31-5-26. Contenido: "
+                "operaciones hasta el 29-05-2026 (visto en una copia del navegador, "
+                "que no es evidencia). Clase B, archivo deslistado.",
+    },
+    # --- NOAA / CPC: el indice de El Niño. Cableado el 17-sep-2026. ---------
+    # LA FUENTE DECLARA QUE REVISA: "RONI values may change up to two months
+    # after the initial real time value is posted", por el filtro sobre
+    # ERSSTv6. Y las climatologias se recalculan cada 5 años, con lo que
+    # cambian valores de hace decadas. Capturar el archivo entero todos los
+    # dias es el vintage que no existe en ningun lado.
+    # Dominio publico (obra del gobierno de EE.UU.): redistribuible.
+    # Se actualiza al dia 5 de cada mes. Texto plano, ~20 KB.
+    "noaa_roni": {
+        "url": "https://www.cpc.ncep.noaa.gov/data/indices/RONI.ascii.txt",
+        "ext": "txt",
+        "desc": "RONI (Relative Oceanic Niño Index), el indice OFICIAL de ENSO desde "
+                "el 01-02-2026 (PIS 26-05 del NWS). Tres meses corridos del Niño 3.4 "
+                "relativo, base ERSSTv6. Serie por trimestre movil desde 1950. La "
+                "fuente declara que un valor puede cambiar hasta dos meses despues.",
+    },
+    "noaa_oni": {
+        "url": "https://www.cpc.ncep.noaa.gov/data/indices/oni.ascii.txt",
+        "ext": "txt",
+        "desc": "ONI (Oceanic Niño Index) base ERSSTv5: el indice que RONI reemplazo "
+                "como oficial en febrero de 2026. Se sigue publicando y es la serie "
+                "con la que esta escrita toda la literatura anterior. Trae TOTAL y "
+                "ANOM por trimestre movil desde 1950.",
+    },
+    # --- USDA / WAOB: el WASDE. Cableado el 17-sep-2026. --------------------
+    # El informe que mueve los precios de los granos. Trae a la Argentina en
+    # todas las tablas (trigo, maiz, soja) y, en cada edicion, la estimacion
+    # del mes anterior AL LADO de la nueva: la revision viene escrita adentro.
+    # Dominio publico -> redistribuible.
+    #
+    # CALENDARIO: 12 fechas al año, a las 12:00 ET, y el propio PDF anuncia
+    # las siguientes ("In 2026 the WASDE report will be released on Oct 9,
+    # Nov 10, and Dec 10"). Otra fuente que promete por escrito.
+    #
+    # NOMBRE: wasde{MMAA}.pdf, sin separador. Verificado sobre wasde0926.pdf,
+    # que es el WASDE-675 del 11-sep-2026. Hasta el dia de la publicacion, el
+    # mes corriente no existe y se resuelve al anterior, que ya esta capturado.
+    "usda_wasde": {
+        "url": "https://www.usda.gov/oce/commodity/wasde/wasde{mesaa}.pdf",
+        "ext": "pdf",
+        "desc": "WASDE del USDA: oferta y demanda mundial de granos, oleaginosas y "
+                "algodon, con la Argentina en todas las tablas. Cada edicion muestra "
+                "la proyeccion del mes anterior junto a la nueva. El PDF anuncia las "
+                "fechas siguientes.",
+    },
 }
 
 # Tipo de contenido por extension. Se declara al subir a R2 para que el objeto
@@ -858,6 +972,7 @@ def urls_candidatas(url):
           {trim} → sh_oferta_demanda_06_26.xls (mes de publicacion trimestral)
           {dia}  → ica_cuadros_20_08_26.xls    (dia de publicacion mensual)
           {mes}  → sh_ipc_08_26.xls            (mes de publicacion mensual)
+          {mesaa}→ wasde0926.pdf               (igual que {mes}, pero PEGADO)
         Dejar esas fechas escritas a mano significaria que el modulo empieza a
         devolver 404 hasta que alguien se acuerde de editarlo. Eso es
         mantenimiento manual, y en este proyecto lo que no es automatico no va.
@@ -880,6 +995,11 @@ def urls_candidatas(url):
     if "{mes}" in url:
         return [url.replace("{mes}", f"{mm:02d}_{aa:02d}")
                 for mm, aa in _meses_publicacion()]
+    # Igual que {mes} pero sin separador: el USDA escribe wasde0926.pdf.
+    # Mismo calendario, misma ventana de dos meses, otra tipografia.
+    if "{mesaa}" in url:
+        return [url.replace("{mesaa}", f"{mm:02d}{aa:02d}")
+                for mm, aa in _meses_publicacion()]
     if "{anio}" not in url:
         return [url]
     anio = datetime.now(timezone.utc).year
@@ -896,13 +1016,75 @@ def bajar_resolviendo(cfg):
     """
     ext = cfg.get("ext", "bin")
     ultimo = None
+    descartados = []
     for u in urls_candidatas(cfg["url"]):
         try:
             datos, headers, final = bajar(u, ext)
-            return datos, headers, u, final
+            return datos, headers, u, final, descartados
         except Exception as e:
+            # Cada candidato descartado queda con su MOTIVO.
+            ausente = isinstance(e, NoEsta)
+            descartados.append({"url": u, "motivo": _motivo(e),
+                                "ausente": ausente})
             ultimo = e
+            if not ausente:
+                # El archivo puede EXISTIR y el servidor fallo. Retroceder
+                # seria servir el periodo anterior como si fuera novedad.
+                # Ver "RETROCESO POR ERROR" en el encabezado.
+                try:
+                    e.corte_por_error = True
+                except Exception:
+                    pass
+                break
+    try:
+        ultimo.descartados = descartados
+    except Exception:
+        pass
     raise ultimo
+
+
+def _motivo(e):
+    """Por que se descarto un candidato, en palabras cortas y estables."""
+    if isinstance(e, NoEsta):
+        return "no esta (404)" if str(e).startswith("404") else "no esta (HTML)"
+    resp = getattr(e, "response", None)
+    if resp is not None and getattr(resp, "status_code", None) is not None:
+        return f"HTTP {resp.status_code}"
+    return type(e).__name__
+
+
+def _nombre(url):
+    return (url or "").rsplit("/", 1)[-1]
+
+
+def _resumen(descartados):
+    """'2 × no esta (404) · 1 × Timeout', en orden de aparicion."""
+    cuenta = {}
+    for d in descartados:
+        cuenta[d["motivo"]] = cuenta.get(d["motivo"], 0) + 1
+    return " · ".join(f"{n} × {m}" for m, n in cuenta.items())
+
+
+def _sufijo(cfg, url_usada, descartados):
+    """Lo que se agrega al renglon del log. Vacio para las URLs planas."""
+    if "{" not in cfg["url"]:
+        return ""
+    s = f"  ← {_nombre(url_usada)}"
+    if descartados:
+        s += f"  [descartados: {_resumen(descartados)}]"
+    malos = [d for d in descartados if not d["ausente"]]
+    if malos:
+        s += f"  ⚠ RETROCESO POR ERROR ({_resumen(malos)}): puede ser un NUEVO falso"
+    return s
+
+
+def _url_ascii(url):
+    """La URL para los METADATOS de R2, que solo aceptan ASCII. Si ya es
+    ASCII se devuelve identica."""
+    url = url or ""
+    if url.isascii():
+        return url
+    return quote(url, safe=":/?#[]@!$&'()*+,;=%~")
 
 
 # Los unicos codigos que significan "todavia no existe", que es CORRECTO en la
@@ -1010,7 +1192,8 @@ def main(argv=None):
         capturado = datetime.now(timezone.utc).isoformat(timespec="seconds")
         url_usada = cfg["url"]
         try:
-            datos, headers, url_usada, url_final = bajar_resolviendo(cfg)
+            datos, headers, url_usada, url_final, descartados = bajar_resolviendo(cfg)
+            sufijo = _sufijo(cfg, url_usada, descartados)
             sha = hashlib.sha256(datos).hexdigest()
             previo = (estado.get(clave) or {}).get("sha256")
             cambio = (sha != previo)
@@ -1036,6 +1219,10 @@ def main(argv=None):
             }
             if url_usada != cfg["url"]:
                 entrada["url_plantilla"] = cfg["url"]
+            if descartados:
+                entrada["candidatos_descartados"] = descartados
+                if any(not d["ausente"] for d in descartados):
+                    entrada["retroceso_por_error"] = True
             if url_final and url_final != url_usada:
                 # El INDEC redirigio. Es un hecho de la fuente: se registra.
                 entrada["url_final"] = url_final
@@ -1050,7 +1237,7 @@ def main(argv=None):
                         Metadata={
                             "sha256": sha,
                             "origen": "boveda-indec",
-                            "url": url_usada[:900],
+                            "url": _url_ascii(url_usada)[:900],
                             "capturado-utc": capturado,
                         },
                     )
@@ -1063,12 +1250,12 @@ def main(argv=None):
                 estado[clave] = {"sha256": sha, "objeto": obj, "visto_utc": capturado}
                 nuevos += 1
                 marca = "NUEVO  →" if previo else "PRIMERA→"
-                print(f"   [indec] {clave:<26} {marca} {len(datos):>8} bytes  {sha[:12]}…")
+                print(f"   [indec] {clave:<26} {marca} {len(datos):>8} bytes  {sha[:12]}…{sufijo}")
             else:
                 # Sin cambios: no se re-sube el binario, pero el manifiesto de
                 # hoy deja constancia de que seguia diciendo lo mismo.
                 entrada["objeto"] = (estado.get(clave) or {}).get("objeto")
-                print(f"   [indec] {clave:<26} sin cambios {len(datos):>8} bytes  {sha[:12]}…")
+                print(f"   [indec] {clave:<26} sin cambios {len(datos):>8} bytes  {sha[:12]}…{sufijo}")
 
             ok += 1
         except Exception as e:
@@ -1078,8 +1265,20 @@ def main(argv=None):
                 "capturado_utc": capturado,
                 "error": f"{type(e).__name__}: {e}",
             }
+            probados = getattr(e, "descartados", None)
+            corte = getattr(e, "corte_por_error", False)
+            if probados and "{" in cfg["url"]:
+                # Un hueco de una URL con fecha tiene que decir QUE se probo.
+                # Antes quedaba la plantilla con {mes} adentro y nada mas.
+                entrada["candidatos_descartados"] = probados
+            if corte and "{" in cfg["url"]:
+                entrada["corte_por_error"] = True
             huecos += 1
-            print(f"   [indec] {clave:<26} HUECO — {type(e).__name__}: {e}")
+            extra = (f"  [probados {len(probados)}: {_resumen(probados)}]"
+                     if probados and "{" in cfg["url"] else "")
+            if corte and "{" in cfg["url"]:
+                extra += "  (no se retrocede: el vigente no respondio, puede existir)"
+            print(f"   [indec] {clave:<26} HUECO — {type(e).__name__}: {e}{extra}")
 
         entradas.append(entrada)
         time.sleep(PAUSA)
