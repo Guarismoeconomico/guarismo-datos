@@ -110,6 +110,12 @@ UN ARCHIVO DESLISTADO — 17-sep-2026
     un archivo de Finanzas que su pagina dejo de listar. La mecanica D solo
     ve lo listado; la B baja URLs fijas. Por eso vive aca.
 
+EL SEGUNDO DESLISTADO — 21-sep-2026
+    fiscal_deslistado_julio_zip: el resultado fiscal de julio 2026 de la
+    Secretaria de Hacienda. La pagina infoestadistica lo listaba el 17-sep y
+    el 18-sep (article:modified_time 11:31) ya no. Misma razon que el de
+    colocaciones. Segunda fuente que saca lo suyo de su listado.
+
 RETROCESO POR ERROR — diagnosticado y corregido el 15-sep-2026
     Hasta esta version, bajar_resolviendo() pasaba al candidato siguiente
     ante CUALQUIER error. Si el archivo del periodo vigente existia pero el
@@ -671,6 +677,27 @@ ARCHIVOS = {
                 "operaciones hasta el 29-05-2026 (visto en una copia del navegador, "
                 "que no es evidencia). Clase B, archivo deslistado.",
     },
+    # --- Hacienda: el resultado fiscal de JULIO 2026, deslistado. ----------
+    # La pagina infoestadistica lo listaba con la etiqueta "Julio" bajo 2026
+    # (manifiesto de la mecanica D del 17-sep-2026: 61.806 bytes, sha256
+    # 9107041850435f29..., Last-Modified 18-ago-2026 14:27:09 GMT, en R2 desde
+    # el 07-sep). El 18-sep la pagina se modifico (11:31 ARG) y julio salio
+    # del listado: hoy lista agosto y junio. Julio ya esta capturado; esta
+    # entrada mide otra cosa: si el archivo SIGUE en el servidor.
+    #   sin cambios  -> deslistado pero guardado
+    #   HUECO 404    -> borrado. Eso es el dato, con fecha.
+    #   NUEVO        -> alguien subio OTRA cosa con este nombre.
+    # OJO: el nombre no trae año. Si Hacienda lo borra, en julio de 2027
+    # puede volver a existir "julio.zip" con otro contenido. El NUEVO lo
+    # registraria; el periodo lo dice la pagina, nunca este nombre.
+    "fiscal_deslistado_julio_zip": {
+        "url": "https://www.argentina.gob.ar/sites/default/files/julio.zip",
+        "ext": "zip",
+        "desc": "Resultado fiscal SPN base caja, Secretaria de Hacienda, publicado con "
+                "la etiqueta 'Julio' bajo 2026 y retirado del listado de "
+                "infoestadistica el 18-sep-2026. Se archiva el ZIP tal cual lo "
+                "publico el organismo, sin descomprimir. Clase B, archivo deslistado.",
+    },
     # --- NOAA / CPC: el indice de El Niño. Cableado el 17-sep-2026. ---------
     # LA FUENTE DECLARA QUE REVISA: "RONI values may change up to two months
     # after the initial real time value is posted", por el filtro sobre
@@ -705,6 +732,7 @@ TIPOS = {
     "xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     "csv": "text/csv; charset=utf-8",
     "txt": "text/plain; charset=utf-8",
+    "zip": "application/zip",
 }
 
 
