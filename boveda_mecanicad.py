@@ -170,6 +170,57 @@ MOTOR COMUN, ETIQUETADOR POR FUENTE
         una noticia son otro nivel y van en otra vuelta; la noticia archivada
         prueba cuales colgaba.
 
+    (13) WASDE DEL USDA POR ESMIS — 22-sep-2026. La primera fuente de afuera.
+        La "otra puerta" que estaba anotada (Cornell) REDIRIGE a ESMIS
+        (esmis.nal.usda.gov, Drupal 11). Verificado el 21-sep-2026.
+
+        NO ES MECANICA B. La ruta lleva un numero de publicacion que no se
+        adivina: release-files/796054/wasde0926.pdf. Es un listado.
+
+        LA PAGINA, TAL CUAL ESTA AL 22-sep-2026 (HTML crudo, no el fetch)
+            - NO declara article:modified_time -> gatillo por listado.
+            - 10 publicaciones por pagina (?page=N), cada una en 4 formatos:
+              pdf, txt, xls, xml. Se mira SOLO la primera pagina: una
+              publicacion nueva aparece arriba.
+            - Una tabla "Latest Release" REPITE la ultima publicacion. El link
+              repetido cuenta una vez (se queda el de la tabla principal, que
+              va primero en la pagina).
+            - Mayo y junio 2026 figuran SOLO como wasde0526v2 y wasde0626v2:
+              el USDA los republico. Si la v1 sigue en el servidor es
+              HIPOTESIS; no se adivina su URL.
+
+        DE DONDE SALE CADA COSA
+            periodo    la fecha del <time datetime> de la CELDA de fecha. Nunca
+                       del nombre del archivo (wasde0926 no dice el dia).
+            producto   el formato, del TEXTO DE LA ETIQUETA ("Sep 11 2026 - pdf").
+                       Si no coincide con la extension de la URL: incierto.
+            id         {numero}_{nombre}, p. ej. 796054_wasde0926. Una v2 tiene
+                       otro numero y otro nombre: es un objeto NUEVO, con su
+                       clave. La v1 no se pisa nunca.
+            hora       NO SE USA. La pagina dice 12:00:00Z y el USDA publica a
+                       las 12:00 de Washington: la fuente rotula mal la zona. La
+                       hora se guarda CRUDA en datetime_en_la_pagina, sin
+                       interpretar. Una hora mal rotulada no es dato.
+            Si la fecha que repite el propio link no es la de su celda, dos
+            textos de la pagina se contradicen: incierto, no se archiva, suena.
+
+        CAPTURA POR APARICION ("captura": "nuevas"), como las noticias: se baja
+        lo que todavia no esta en el estado. Lo ya archivado no se vuelve a
+        pedir todos los dias.
+
+        EL PUNTO CIEGO, ESCRITO: si el USDA REEMPLAZA un archivo EN LA MISMA URL,
+        esto no lo ve. La clave ya esta en el estado y no se baja de nuevo. La
+        v2 de mayo y junio se ve porque vino con URL nueva. Si algun dia hace
+        falta vigilar reemplazos en el lugar, es otra decision.
+
+        txt y xml van en la lista PROPIA del WASDE (WASDE_EXTENSIONES), no en
+        EXTENSIONES: las otras catorce fuentes no ven nada distinto. En TIPOS
+        se suman los dos content-types, que solo usa esta fuente.
+
+        La primera corrida baja las 10 ediciones listadas: 40 archivos, CLASE B
+        (reconstruidas, no vistas al salir). La primera Clase A del WASDE es la
+        del viernes 9-oct-2026, 12:00 de Washington.
+
 LO QUE NO HACE
     No descomprime los .zip ni los .rar del fiscal. Se archiva el objeto que
     publico el organismo, tal cual. Descomprimir seria producir un artefacto
@@ -222,6 +273,9 @@ TIPOS = {
     "pdf": "application/pdf",
     "zip": "application/zip",
     "rar": "application/vnd.rar",
+    # Solo los usa el WASDE (13). No estan en EXTENSIONES a proposito.
+    "txt": "text/plain",
+    "xml": "application/xml",
     "html": "text/html; charset=utf-8",
 }
 
@@ -464,6 +518,20 @@ FUENTES = {
         "desc": "Finanzas — cronograma 2026 de llamados y licitaciones del Tesoro",
         "etiquetador": "cronograma_licitaciones",
         "organismo": "Secretaria de Finanzas",
+    },
+
+    # --- USDA, WASDE. Reconocido el 21-sep-2026 sobre el HTML crudo. ---
+    #
+    # La primera fuente que no es argentina. Ver (13) arriba. Dominio publico
+    # (obra del gobierno de EE.UU.) -> guarismo-crudo, como las otras.
+    # Una sola pagina: sin paginas_fijas, la clave es usda_wasde_pagina.
+    "usda_wasde": {
+        "url": "https://esmis.nal.usda.gov/publication/world-agricultural-supply-and-demand-estimates",
+        "desc": "USDA — World Agricultural Supply and Demand Estimates (WASDE), via ESMIS",
+        "etiquetador": "wasde",
+        "organismo": "USDA — World Agricultural Outlook Board",
+        "gatillo": "listado",
+        "captura": "nuevas",
     },
 }
 
@@ -1538,6 +1606,90 @@ def etiquetar_noticias_finanzas(pagina, base):
     return salida
 
 
+# --- WASDE (13) ---
+WASDE_EXTENSIONES = ("pdf", "txt", "xls", "xml")
+WASDE_FILA = re.compile(r"<tr\b[^>]*>(.*?)</tr>", re.S | re.I)
+WASDE_CELDA_FECHA = re.compile(
+    r"<td\b[^>]*class=\"[^\"]*views-field-release-date[^\"]*\"[^>]*>(.*?)</td>",
+    re.S | re.I)
+WASDE_TIME = re.compile(r"<time\b[^>]*datetime=\"([^\"]+)\"", re.I)
+WASDE_LINK = re.compile(
+    r'<a\b[^>]*href="([^"]*/release-files/(\d+)/([^"/?#]+))"[^>]*>(.*?)</a>',
+    re.S | re.I)
+WASDE_FECHA = re.compile(r"^((?:19|20)\d{2})-(\d{2})-(\d{2})")
+
+
+def etiquetar_wasde(pagina, base):
+    """ESMIS: una fila por publicacion · <time> en la celda · 4 formatos.
+
+    Ver (13) en el encabezado. Todo lo que no resuelve queda incierto: no se
+    archiva y suena. Un link de release-files que aparezca FUERA de una fila
+    con celda de fecha tambien suena: no se identifico, no se archiva.
+    """
+    salida, vistos = [], set()
+
+    def _item(href, numero, nombre, ltxt, dt_celda, dt_link):
+        a = _href(href)
+        url = _absoluta(a, base)
+        if not url:
+            return
+        url, esquema = _a_https_mismo_host(url, base)
+        if url in vistos:
+            return
+        vistos.add(url)
+        ext = _ext_de(url)
+        etiqueta = _limpiar(ltxt)
+        prod = etiqueta.rsplit(" - ", 1)[-1].strip().lower() if etiqueta else ""
+        raiz = nombre.rsplit(".", 1)[0]
+        it = {
+            "familia": "WASDE",
+            "producto": prod if prod in WASDE_EXTENSIONES else "archivo",
+            "etiqueta": etiqueta or None,
+            "id": f"{numero}_{raiz}",
+            "anio": None, "orden": None, "periodo": None,
+            "periodo_incierto": True,
+            "url": url, "ext": ext,
+        }
+        if dt_celda:
+            it["datetime_en_la_pagina"] = dt_celda
+        mf = WASDE_FECHA.match(dt_celda or "")
+        fecha = None
+        if mf:
+            try:
+                fecha = datetime(int(mf.group(1)), int(mf.group(2)),
+                                 int(mf.group(3)))
+            except ValueError:
+                fecha = None
+        if dt_link and dt_celda and dt_link != dt_celda:
+            it["conflicto_celda_vs_etiqueta"] = f"celda {dt_celda} · link {dt_link}"
+        if (fecha and ext in WASDE_EXTENSIONES and prod == ext
+                and "conflicto_celda_vs_etiqueta" not in it):
+            it.update(anio=fecha.year, orden=fecha.month * 100 + fecha.day,
+                      periodo=f"{fecha:%Y-%m-%d}", periodo_incierto=False)
+        if _roto(a):
+            it["href_roto_en_la_fuente"] = True
+        if esquema:
+            it["esquema_corregido_por_guarismo"] = "http->https"
+        salida.append(it)
+
+    for fila in WASDE_FILA.finditer(pagina):
+        cuerpo = fila.group(1)
+        mc = WASDE_CELDA_FECHA.search(cuerpo)
+        if not mc:
+            continue
+        mt = WASDE_TIME.search(mc.group(1))
+        dt_celda = mt.group(1) if mt else None
+        for ml in WASDE_LINK.finditer(cuerpo):
+            mtl = WASDE_TIME.search(ml.group(4))
+            _item(ml.group(1), ml.group(2), ml.group(3), ml.group(4),
+                  dt_celda, mtl.group(1) if mtl else None)
+
+    # Lo que quedo afuera de una fila con fecha: se lista incierto.
+    for ml in WASDE_LINK.finditer(pagina):
+        _item(ml.group(1), ml.group(2), ml.group(3), ml.group(4), None, None)
+    return salida
+
+
 ETIQUETADORES = {
     "hacienda": etiquetar_hacienda,
     "finanzas": etiquetar_finanzas,
@@ -1552,6 +1704,7 @@ ETIQUETADORES = {
     "colocaciones": etiquetar_colocaciones,
     "cronograma_licitaciones": etiquetar_cronograma_licitaciones,
     "noticias_finanzas": etiquetar_noticias_finanzas,
+    "wasde": etiquetar_wasde,
 }
 
 
@@ -2144,7 +2297,7 @@ def main(argv=None):
                               "fecha_en_la_agenda", "agenda_distinta_de_etiqueta",
                               "url_no_ascii", "conflicto_celda_vs_nombre",
                               "estado_en_el_nombre", "anio_de_la_pagina",
-                              "hora_en_la_pagina", "id"):
+                              "hora_en_la_pagina", "id", "datetime_en_la_pagina"):
                     if extra in it:
                         entrada[extra] = it[extra]
                 if ufin and ufin != it["url"]:
@@ -2181,7 +2334,7 @@ def main(argv=None):
                               "fecha_en_la_agenda", "agenda_distinta_de_etiqueta",
                               "url_no_ascii", "conflicto_celda_vs_nombre",
                               "estado_en_el_nombre", "anio_de_la_pagina",
-                              "hora_en_la_pagina", "id"):
+                              "hora_en_la_pagina", "id", "datetime_en_la_pagina"):
                     if extra in it:
                         entrada[extra] = it[extra]
                 huecos += 1
