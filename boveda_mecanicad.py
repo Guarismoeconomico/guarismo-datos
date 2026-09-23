@@ -221,6 +221,38 @@ MOTOR COMUN, ETIQUETADOR POR FUENTE
         (reconstruidas, no vistas al salir). La primera Clase A del WASDE es la
         del viernes 9-oct-2026, 12:00 de Washington.
 
+    (14) LA PAGINA DE CADA EDICION DEL WASDE — consulta 17.1 -> A, 22-sep-2026.
+        Cada fila del listado tiene un link "View" a la pagina de esa edicion.
+        AHI, y no en el listado, el USDA escribe sus correcciones. El caso que
+        lo destapo, verificado sobre el HTML crudo el 22-sep-2026:
+            /2026-05-12-0 (Release Abstract): el 13-may-2026 republico el WASDE
+            de mayo para corregir la tabla de trigo por clase (671-11): trigo
+            blanco importado 25/26, 5 -> 7 millones de bushels; total 123 ->
+            125; y las correcciones consecuentes en oferta y stocks finales.
+        El listado sigue fechando esa edicion el 12-may. La fecha de la
+        correccion SOLO existe en la nota. Junio (v2) no trae nota.
+
+        LA URL SALE DEL LISTADO, NUNCA SE ARMA. Mayo es /2026-05-12-0 (sufijo
+        de Drupal); /2026-05-12 da "Page Not Found". Armarla a mano fallo el
+        mismo dia que se descubrio.
+
+        GATILLO POR CONTENIDO VISIBLE, NO POR APARICION.
+            La nota de mayo es del 13 y la edicion del 12: una captura por
+            aparicion la habria perdido. Se bajan las 10 paginas de edicion
+            todos los dias ("revisar_contenido") y se archiva una solo si cambia
+            su FIRMA DE CONTENIDO: el texto visible de <main> + sus links. Asi
+            una nota agregada o editada se ve, y un servidor que reserializa
+            atributos no dispara nada. Sin <main> no hay firma: se compara por
+            hash y el manifiesto lo dice.
+
+        Las paginas de edicion NO entran en la firma del listado: tienen su
+        propio gatillo. Si entraran, el dia del estreno el listado "cambiaria"
+        sin que el USDA publique nada, y eso envenena la puntualidad.
+
+        EN EL LOG: "50 links · 0 sin resolver · 10 a capturar" es el regimen
+        normal (40 archivos + 10 ediciones), con las 10 "sin cambios". Una
+        edicion en NUEVO es una pagina de edicion que el USDA toco.
+
 LO QUE NO HACE
     No descomprime los .zip ni los .rar del fiscal. Se archiva el objeto que
     publico el organismo, tal cual. Descomprimir seria producir un artefacto
@@ -1617,6 +1649,9 @@ WASDE_LINK = re.compile(
     r'<a\b[^>]*href="([^"]*/release-files/(\d+)/([^"/?#]+))"[^>]*>(.*?)</a>',
     re.S | re.I)
 WASDE_FECHA = re.compile(r"^((?:19|20)\d{2})-(\d{2})-(\d{2})")
+# El link "View" de cada fila: la pagina de la edicion (14).
+WASDE_VIEW = re.compile(
+    r'<a\b[^>]*href="([^"]*/publication/[^"]+)"[^>]*>\s*View\s*</a>', re.I)
 
 
 def etiquetar_wasde(pagina, base):
@@ -1672,6 +1707,37 @@ def etiquetar_wasde(pagina, base):
             it["esquema_corregido_por_guarismo"] = "http->https"
         salida.append(it)
 
+    def _edicion(href, dt_celda):
+        """La pagina de la edicion (14). Se revisa por contenido, todos los dias."""
+        a = _href(href)
+        url = _absoluta(a, base)
+        if not url:
+            return
+        url, esquema = _a_https_mismo_host(url, base)
+        if url in vistos:
+            return
+        vistos.add(url)
+        slug = url.rstrip("/").rsplit("/", 1)[-1]
+        it = {
+            "familia": "WASDE", "producto": "edicion", "etiqueta": slug,
+            "id": slug, "anio": None, "orden": None, "periodo": None,
+            "periodo_incierto": True, "url": url, "ext": "html",
+            "revisar_contenido": True,
+        }
+        if dt_celda:
+            it["datetime_en_la_pagina"] = dt_celda
+        mf = WASDE_FECHA.match(dt_celda or "")
+        if mf:
+            try:
+                f = datetime(int(mf.group(1)), int(mf.group(2)), int(mf.group(3)))
+                it.update(anio=f.year, orden=f.month * 100 + f.day,
+                          periodo=f"{f:%Y-%m-%d}", periodo_incierto=False)
+            except ValueError:
+                pass
+        if esquema:
+            it["esquema_corregido_por_guarismo"] = "http->https"
+        salida.append(it)
+
     for fila in WASDE_FILA.finditer(pagina):
         cuerpo = fila.group(1)
         mc = WASDE_CELDA_FECHA.search(cuerpo)
@@ -1683,6 +1749,9 @@ def etiquetar_wasde(pagina, base):
             mtl = WASDE_TIME.search(ml.group(4))
             _item(ml.group(1), ml.group(2), ml.group(3), ml.group(4),
                   dt_celda, mtl.group(1) if mtl else None)
+        mv = WASDE_VIEW.search(cuerpo)
+        if mv:
+            _edicion(mv.group(1), dt_celda)
 
     # Lo que quedo afuera de una fila con fecha: se lista incierto.
     for ml in WASDE_LINK.finditer(pagina):
@@ -1764,8 +1833,27 @@ def firma_listado(items):
     Incluye los inciertos: un informe nuevo que no resuelve tambien es un
     cambio del listado, y tiene que quedar la pagina de ese dia.
     """
-    pares = sorted(f"{i.get('url')}\t{i.get('etiqueta')}" for i in items)
+    # Lo que se revisa por contenido (14) tiene gatillo propio y NO entra: si
+    # entrara, el listado "cambiaria" el dia que se suma sin que nadie publique.
+    pares = sorted(f"{i.get('url')}\t{i.get('etiqueta')}" for i in items
+                   if not i.get("revisar_contenido"))
     return hashlib.sha256("\n".join(pares).encode("utf-8")).hexdigest()
+
+
+def firma_contenido(datos):
+    """sha256 del texto visible de <main> + sus links. None si no hay <main>.
+
+    Ver (14). Los atributos que el servidor reescribe en cada render (ids de
+    Drupal) quedan afuera; una nota nueva o editada, adentro.
+    """
+    txt = datos.decode("utf-8", errors="replace")
+    m = re.search(r"<main\b.*?</main>", txt, re.S | re.I)
+    if not m:
+        return None
+    cuerpo = re.sub(r"<(script|style)\b.*?</\1>", " ", m.group(0), flags=re.S | re.I)
+    hrefs = sorted(set(_href(h) for h in re.findall(r'href="([^"]+)"', cuerpo)))
+    firma = _limpiar(cuerpo) + "\n" + "\n".join(hrefs)
+    return hashlib.sha256(firma.encode("utf-8")).hexdigest()
 
 
 def _sin_repetidos(items):
@@ -2242,8 +2330,10 @@ def main(argv=None):
         elif cfg.get("captura") == "nuevas" and not backfill:
             # Una noticia no se revisa: nace y queda. Se baja lo que todavia
             # no esta en el estado; el resto ya esta archivado con su sello.
+            # Las paginas de edicion del WASDE (14) se revisan todos los dias.
             elegidos = [i for i in items if not i["periodo_incierto"]
-                        and clave_de(fuente, i) not in estado]
+                        and (i.get("revisar_contenido")
+                             or clave_de(fuente, i) not in estado)]
         else:
             elegidos = ([i for i in items if not i["periodo_incierto"]]
                         if backfill else seleccionar(items))
@@ -2260,6 +2350,12 @@ def main(argv=None):
                 sha = hashlib.sha256(datos).hexdigest()
                 previo = (estado.get(clave) or {}).get("sha256")
                 cambio = sha != previo
+                firma_c = None
+                if it.get("revisar_contenido"):
+                    # (14): manda el contenido visible, no el hash.
+                    firma_c = firma_contenido(datos)
+                    if firma_c is not None and previo is not None:
+                        cambio = firma_c != (estado.get(clave) or {}).get("firma_contenido")
 
                 entrada = {
                     "fuente": fuente, "tipo": "archivo", "archivo": clave,
@@ -2302,6 +2398,12 @@ def main(argv=None):
                         entrada[extra] = it[extra]
                 if ufin and ufin != it["url"]:
                     entrada["url_final"] = ufin
+                if it.get("revisar_contenido"):
+                    entrada["firma_contenido"] = firma_c
+                    entrada["motivo_cambio"] = ("contenido visible" if firma_c
+                                                else "hash (la pagina no tiene <main>)")
+                    entrada["reserializa"] = (previo is not None and sha != previo
+                                              and not cambio)
 
                 if cambio:
                     entrada["objeto"] = guardar(s3, bucket, sello, ahora, clave,
@@ -2310,12 +2412,16 @@ def main(argv=None):
                     if not seco:
                         estado[clave] = {"sha256": sha, "objeto": entrada["objeto"],
                                          "visto_utc": capturado}
+                        if firma_c is not None:
+                            estado[clave]["firma_contenido"] = firma_c
                     nuevos += 1
                     marca = "NUEVO  →" if previo else "PRIMERA→"
                     print(f"   [mecD] {clave:<30} {marca} {len(datos):>9} bytes  {sha[:12]}…")
                 else:
                     entrada["objeto"] = (estado.get(clave) or {}).get("objeto")
-                    print(f"   [mecD] {clave:<30} sin cambios {len(datos):>9} bytes  {sha[:12]}…")
+                    extra = ("  [reserializa: mismo contenido, otro hash]"
+                             if it.get("revisar_contenido") and sha != previo else "")
+                    print(f"   [mecD] {clave:<30} sin cambios {len(datos):>9} bytes  {sha[:12]}…{extra}")
                 ok += 1
             except Exception as e:
                 # MISMO DEFECTO QUE SE CORRIGIO HOY EN LA RAMA QUE ANDA, EN
