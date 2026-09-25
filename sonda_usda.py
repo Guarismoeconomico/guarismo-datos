@@ -4,74 +4,66 @@ No escribe en R2. No sella. No guarda estado. No usa secretos. Corre una vez
 y reporta. Se borra junto con .github/workflows/sonda-usda.yml cuando se
 decida como se cablean PSD y GAIN (cola 5 del Tablero).
 
-VUELTA 1 (25-sep-2026, commit fc6a4ab295): el runner entra a
-apps.fas.usda.gov y a gain.fas.usda.gov; www.fas.usda.gov le da 403.
+VUELTA 1 (commit fc6a4ab295): el runner entra a apps.fas.usda.gov y a
+gain.fas.usda.gov; www.fas.usda.gov le da 403.
 
-VUELTA 2 (esta): ¿DE DONDE SALE LA LISTA DE LOS GAIN?
-  gain.fas.usda.gov es una aplicacion JavaScript ("Loading..."): el HTML no
-  trae los informes. Los informes se bajan de
-      apps.fas.usda.gov/newgainapi/api/Report/DownloadReportByFileName?fileName=...
-  (visto en resultados de busqueda). Falta el LISTADO: que endpoint usa la
-  aplicacion para buscar. Esta vuelta baja el HTML de gain.fas.usda.gov, sus
-  scripts, y lista las rutas de API que aparecen escritas adentro. No llama a
-  ninguna de esas rutas: solo las muestra.
+VUELTA 2 (commit e199c11955): la aplicacion GAIN habla con
+    https://apps.fas.usda.gov/newgainapi/api      (y .../newgainapi/token)
+por dos controladores, Report/ y Lookup/. Los NOMBRES de los metodos se pegan
+en el codigo aparte, por eso no salieron.
+
+VUELTA 3 (esta): muestra el CODIGO ALREDEDOR de cada uso de Report/, Lookup/,
+token y Authorization en main-es2018.js, para leer que metodo lista informes,
+con que parametros, y si pide token. Solo el script propio de la aplicacion:
+nada de Google. No llama a ninguna ruta de la API.
 """
 
 import hashlib
 import re
-import time
-from urllib.parse import urljoin
 
 import requests
 
 UA = {"User-Agent": "Guarismo/1.0 (+https://guarismo.com.ar; infoguarismo@gmail.com)"}
-TIMEOUT = 60
-PAUSA = 2.0
-RAIZ = "https://gain.fas.usda.gov/"
-
-
-def bajar(url):
-    try:
-        r = requests.get(url, headers=UA, timeout=TIMEOUT)
-    except Exception as e:
-        print(f"   ERROR   {url}  {type(e).__name__}: {e}")
-        return None
-    b = r.content or b""
-    print(f"   {r.status_code}  {len(b):>9} bytes  sha {hashlib.sha256(b).hexdigest()[:12]}  "
-          f"{r.headers.get('Content-Type')}  {url}")
-    return b if r.status_code == 200 else None
+TIMEOUT = 90
+SCRIPT = "https://gain.fas.usda.gov/main-es2018.js"
+BUSCAR = [r"Report/", r"Lookup/", r"newgainapi/token", r"grant_type",
+          r"Authorization", r"Bearer", r"DownloadReportByFileName"]
+ANCHO = 220
+MAXIMO = 25
 
 
 def main():
-    print("[sonda-usda v2] ¿de donde sale la lista de los GAIN? · solo lectura")
-    print("\n== HTML de la aplicacion")
-    html = bajar(RAIZ)
-    if not html:
+    print("[sonda-usda v3] ¿con que metodo lista informes la app GAIN? · solo lectura")
+    try:
+        r = requests.get(SCRIPT, headers=UA, timeout=TIMEOUT)
+    except Exception as e:
+        print(f"   ERROR {type(e).__name__}: {e}")
         return 0
-    t = html.decode("utf-8", "replace")
-    scripts = re.findall(r'<script[^>]+src="([^"]+)"', t, re.I)
-    print(f"   scripts declarados: {len(scripts)}")
-    for s in scripts:
-        print(f"      {s}")
-    rutas = {}
-    print("\n== Scripts")
-    for s in scripts:
-        time.sleep(PAUSA)
-        b = bajar(urljoin(RAIZ, s))
-        if not b:
-            continue
-        js = b.decode("utf-8", "replace")
-        for m in re.finditer(r'["\'`]((?:https?://[^"\'`\s]*)?/?(?:newgainapi|api)/[A-Za-z0-9_/\-\.\?=&{}$]+)["\'`]', js):
-            rutas.setdefault(m.group(1), s)
-        for m in re.finditer(r'https?://[a-z0-9\.\-]*usda\.gov[^"\'`\s]*', js):
-            rutas.setdefault(m.group(0), s)
-        # Rutas armadas en el codigo ("${base}/newgainapi/..."): el pedazo fijo.
-        for m in re.finditer(r'newgainapi/api/[A-Za-z0-9_/\-]+', js):
-            rutas.setdefault(m.group(0), s)
-    print(f"\n== Rutas de API escritas en los scripts: {len(rutas)}")
-    for r_, s in sorted(rutas.items()):
-        print(f"   {r_}")
-    print("\n[sonda-usda v2] fin. No se llamo a ninguna de esas rutas.")
+    b = r.content or b""
+    print(f"   {r.status_code}  {len(b)} bytes  sha {hashlib.sha256(b).hexdigest()[:12]}  {SCRIPT}")
+    js = b.decode("utf-8", "replace")
+
+    print("\n== Nombres de metodo pegados a Report/ o Lookup/")
+    nombres = sorted(set(re.findall(r'["\'`](?:Report|Lookup|ReportSchedule)/[A-Za-z0-9_]+', js)))
+    for n in nombres:
+        print(f"   {n.strip(chr(34)+chr(39)+'`')}")
+
+    for patron in BUSCAR:
+        vistos = set()
+        ocurr = [m.start() for m in re.finditer(patron, js)]
+        print(f"\n== {patron}  ({len(ocurr)} ocurrencias; se muestran hasta {MAXIMO} distintas)")
+        n = 0
+        for i in ocurr:
+            trozo = js[max(0, i - ANCHO // 2): i + ANCHO // 2].replace("\n", " ")
+            clave = re.sub(r"\s+", " ", trozo)
+            if clave in vistos:
+                continue
+            vistos.add(clave)
+            print(f"   …{clave}…")
+            n += 1
+            if n >= MAXIMO:
+                break
+    print("\n[sonda-usda v3] fin. No se llamo a ninguna ruta de la API.")
     return 0
 
 
