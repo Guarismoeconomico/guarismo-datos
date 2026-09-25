@@ -1,0 +1,26 @@
+name: Sonda USDA FAS (DESCARTABLE)
+
+# DESCARTABLE. Reconocimiento de solo lectura: ¿el runner puede bajar de los
+# hosts del FAS (apps.fas.usda.gov, www.fas.usda.gov, gain.fas.usda.gov)?
+# No escribe en R2 ni en Supabase. No usa secretos. Se borra junto con
+# sonda_usda.py cuando se decida el cableado de PSD y GAIN.
+#
+# Sin schedule: se dispara a mano y nada mas.
+
+on:
+  workflow_dispatch:
+
+jobs:
+  sonda:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - run: pip install requests
+
+      - name: Sondear los hosts del FAS
+        run: python sonda_usda.py
