@@ -722,6 +722,43 @@ ARCHIVOS = {
                 "con la que esta escrita toda la literatura anterior. Trae TOTAL y "
                 "ANOM por trimestre movil desde 1950.",
     },
+
+    # --- USDA FAS: las circulares World Markets and Trade -----------------
+    #
+    # Consulta 19.2, 25-sep-2026. ESMIS dejo de publicarlas en agosto de 2025
+    # (Grain y Oilseeds WM&T: "Latest Release Aug 12 2025"). Las vigentes
+    # viven en apps.fas.usda.gov con UNA URL FIJA por circular, que el FAS
+    # REESCRIBE el dia del WASDE. Es el caso ITCRM: la version del mes pasado
+    # no queda en ningun lado. (Reescritura mensual: hipotesis de un caso —
+    # hoy dice septiembre 2026 y Last-Modified 11-sep-2026.)
+    #
+    # POR QUE MECANICA B Y NO D: la pagina que las lista
+    # (psdDataPublications.aspx) redirige a app/index.html, una aplicacion
+    # JavaScript de 2,3 KB sin los links adentro. No hay pagina server-side de
+    # donde sacar la URL. La URL la cita el propio PDF del FAS.
+    #
+    # PROBADO EN EL RUNNER (sonda-usda, 25-sep-2026): apps.fas.usda.gov
+    # responde 200 con PDF de verdad. www.fas.usda.gov da 403 (como usda.gov).
+    #
+    # Los headers traen Last-Modified: grain 11-sep 14:58 UTC, oilseeds 11-sep
+    # 15:48 UTC. El manifiesto los guarda; la hora de publicacion prometida
+    # es la del WASDE (12:00 ET).
+    #
+    # Dominio publico (obra del gobierno de EE.UU.): redistribuible.
+    "usda_circular_grain": {
+        "url": "https://apps.fas.usda.gov/psdonline/circulars/grain.pdf",
+        "ext": "pdf",
+        "desc": "USDA FAS — Grain: World Markets and Trade, circular mensual VIGENTE. "
+                "URL FIJA que se reescribe el dia del WASDE. Trae las tablas PSD de "
+                "trigo, arroz y granos gruesos por pais, Argentina incluida.",
+    },
+    "usda_circular_oilseeds": {
+        "url": "https://apps.fas.usda.gov/psdonline/circulars/oilseeds.pdf",
+        "ext": "pdf",
+        "desc": "USDA FAS — Oilseeds: World Markets and Trade, circular mensual "
+                "VIGENTE. URL FIJA que se reescribe el dia del WASDE. Soja, girasol "
+                "y derivados por pais, Argentina incluida.",
+    },
 }
 
 # Tipo de contenido por extension. Se declara al subir a R2 para que el objeto
