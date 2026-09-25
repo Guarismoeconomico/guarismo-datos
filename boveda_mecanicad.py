@@ -253,6 +253,46 @@ MOTOR COMUN, ETIQUETADOR POR FUENTE
         normal (40 archivos + 10 ediciones), con las 10 "sin cambios". Una
         edicion en NUEVO es una pagina de edicion que el USDA toco.
 
+    (15) EL REM, DESDE LA PAGINA — consulta 19.1 -> B, 25-sep-2026.
+        El 24-sep-2026 a las 12:27 el BCRA RENOMBRO los siete archivos del REM
+        sin tocar una letra del texto de la pagina. La pagina archivada lo
+        probo sola: 7 links distintos, mismo contenido visible.
+            antes   relevamiento-expectativas-mercado-ago-2026.pdf
+                    tablas-relevamiento-expectativas-mercado-ago-2026.xlsx
+                    {listado,ranking,historico,metodologia,consideraciones}-
+                    relevamiento-expectativas-mercado.{pdf,xlsx}
+            ahora   relevamiento-expectativas-mercado-2026-08.pdf
+                    relevamiento-expectativas-mercado-tablas-2026-08.xlsx
+                    relevamiento-expectativas-mercado-{listado,...}.{pdf,xlsx}
+        La mecanica B ARMABA esas URLs con {mes3}. Era la cuarta vez que la
+        URL del REM cambiaba. Con el patron viejo, el 6-oct los cinco de URL
+        fija habrian quedado en "sin cambios" para siempre: perdida silenciosa
+        de algo irrecuperable.
+
+        LA URL SALE DEL LINK, NUNCA SE ARMA. La seccion "Archivos" es un
+        bloque de lineas separadas por <br>: "ETIQUETA | <a>PDF</a> | <a>XLSX</a>".
+            periodo   de la ETIQUETA DE LA FILA ("REM AGOSTO 2026"). Nunca del
+                      nombre: si el nombre trae otra fecha, se anota y suena
+                      (regla 10), y se guarda con la de la pagina.
+            producto  de la etiqueta de la fila + el formato del link:
+                      fila con mes y año -> informe (PDF) / tablas (XLSX).
+                      Las otras cinco -> "vigente", clave estable, como el
+                      cronograma: el BCRA las reescribe en el lugar cada mes.
+            formato   el TEXTO del link ("PDF") tiene que coincidir con la
+                      extension de la URL. Si no: incierto, no se archiva, suena.
+            Una fila que no se reconoce queda incierta. Nunca se archiva lo que
+            no se identifico.
+
+        LOS SIETE SE BAJAN TODOS LOS DIAS (seleccion normal, sin "nuevas"):
+        hoy los baja la mecanica B desde las URLs viejas, y el hash decide si
+        se guarda algo. Las entradas rem_* de la B NO se tocan en este cambio:
+        mientras las URLs viejas respondan, son la vigilancia de lo deslistado.
+        El dia que den HUECO, queda registrado que el BCRA las saco.
+
+        La primera corrida da 7 PRIMERA: la edicion de agosto, por la URL
+        nueva. Si los bytes son los mismos que tiene la B por la URL vieja, el
+        manifiesto de las dos lo muestra (mismo sha).
+
 LO QUE NO HACE
     No descomprime los .zip ni los .rar del fiscal. Se archiva el objeto que
     publico el organismo, tal cual. Descomprimir seria producir un artefacto
@@ -491,12 +531,13 @@ FUENTES = {
     },
     "bcra_rem": {
         # La pagina del REM se REESCRIBE cada mes: resumen ejecutivo nuevo y
-        # links a la edicion nueva. Los siete archivos ya los captura la
-        # mecanica B (rem_*): aca se guarda la pagina, que prueba cuales
-        # estaban linkeados y a que hora la toco el BCRA (4-sep-2026 17:51).
+        # links a la edicion nueva. Desde el 25-sep-2026 los siete archivos
+        # salen de ACA, del link de la pagina (ver (15)): el 24-sep el BCRA
+        # los renombro y la mecanica B los armaba. Las rem_* de la B quedan
+        # como vigilancia de las URLs viejas.
         "url": "https://www.bcra.gob.ar/relevamiento-expectativas-mercado-rem/",
         "desc": "BCRA — pagina del REM (resumen ejecutivo y archivos vigentes)",
-        "etiquetador": "solo_pagina",
+        "etiquetador": "rem",
         "organismo": "Banco Central de la Republica Argentina",
     },
     "bcra_itcrm_metodologias_ant": {
@@ -1336,10 +1377,9 @@ def etiquetar_sagyp(pagina, base):
 def etiquetar_solo_pagina(pagina, base):
     """La pagina es el objeto. No hay archivos que capturar desde aca.
 
-    Para el calendario, porque no linkea ninguno. Para la pagina del REM,
-    porque sus siete archivos ya los captura la mecanica B: bajarlos otra vez
-    seria duplicar objetos y pedidos contra el BCRA todos los dias. La lista
-    de lo que la pagina linkeaba queda probada en la pagina archivada.
+    Para el calendario, porque no linkea ninguno. (Hasta el 25-sep-2026 la
+    usaba tambien la pagina del REM; desde entonces tiene etiquetador propio,
+    ver (15).)
     """
     return []
 
@@ -1411,6 +1451,91 @@ def etiquetar_itcrm_metodologias(pagina, base):
         if esquema:
             it["esquema_corregido_por_guarismo"] = "http->https"
         salida.append(it)
+    return salida
+
+
+REM_CORTE = re.compile(r"<br\s*/?>|</?(?:div|p|li|tr|td|h[1-6])\b[^>]*>", re.I)
+REM_LINK = re.compile(r'<a\b[^>]*href="([^"]+)"[^>]*>(.*?)</a>', re.S | re.I)
+REM_FIJOS = (
+    # (palabra en la etiqueta de la fila, producto). El orden importa:
+    # "Metodologia Ranking" tiene que ganar antes que "Ranking".
+    ("metodolog", "metodologia"),
+    ("consideraci", "consideraciones"),
+    ("participante", "participantes"),
+    ("listado", "participantes"),
+    ("hist", "historico"),
+    ("ranking", "ranking"),
+)
+REM_NOMBRE_FECHA = re.compile(r"-((?:19|20)\d{2})-(\d{2})\.[a-z0-9]+$", re.I)
+
+
+def etiquetar_rem(pagina, base):
+    """La seccion Archivos del REM: una LINEA por fila, separada por <br>.
+
+    LA PAGINA, TAL CUAL ESTA AL 24-sep-2026 (HTML crudo, guardado en R2)
+        REM AGOSTO 2026 | <a>PDF</a> | <a>XLSX</a><br />
+        REM Consideraciones | <a>PDF</a><br />
+        REM Listado de Participantes | <a>PDF</a><br />
+        REM Metodología Ranking | <a>PDF</a><br />
+        REM Ranking | <a>XLSX</a><br />
+        REM Resultados históricos | <a>XLSX</a>
+
+    La etiqueta de la fila es el texto antes del primer "|". Ver (15).
+    """
+    salida, vistos = [], set()
+    for trozo in REM_CORTE.split(pagina):
+        links = [m for m in REM_LINK.finditer(trozo)
+                 if _ext_de(_href(m.group(1))) in EXTENSIONES]
+        if not links:
+            continue
+        cabeza = _limpiar(trozo[:links[0].start()])
+        fila = cabeza.split("|", 1)[0].strip() if "|" in cabeza else ""
+        mf = MES_ANIO.search(fila)
+        for m in links:
+            crudo = _href(m.group(1))
+            ext = _ext_de(crudo)
+            url = _absoluta(crudo, base)
+            if not url or url in vistos:
+                continue
+            vistos.add(url)
+            url, esquema = _a_https_mismo_host(url, base)
+            formato = _limpiar(m.group(2))
+            it = {
+                "familia": "REM", "producto": None,
+                "etiqueta": f"{fila} | {formato}" if fila else formato,
+                "anio": None, "orden": None, "periodo": None,
+                "periodo_incierto": True, "url": url, "ext": ext,
+            }
+            formato_ok = formato.lower() == ext
+            if not formato_ok:
+                it["formato_distinto_de_la_extension"] = f"link={formato!r} · url=.{ext}"
+            elif mf:
+                anio, mes = int(mf.group(2)), MESES[mf.group(1).lower()]
+                prod = {"pdf": "informe", "xlsx": "tablas", "xls": "tablas"}.get(ext)
+                if prod:
+                    it.update(producto=prod, anio=anio, orden=mes,
+                              periodo=f"{anio}-{mes:02d}", periodo_incierto=False)
+                    nombre = url.rsplit("/", 1)[-1]
+                    mn = REM_NOMBRE_FECHA.search(nombre)
+                    if mn:
+                        it["fecha_en_el_nombre"] = f"{mn.group(1)}-{mn.group(2)}"
+                        if (int(mn.group(1)), int(mn.group(2))) != (anio, mes):
+                            # Regla (10): el nombre no veta. Se anota y suena.
+                            it["conflicto_celda_vs_nombre"] = (
+                                f"pagina={anio}-{mes:02d} · nombre={mn.group(1)}-{mn.group(2)}")
+            else:
+                baja = fila.lower()
+                prod = next((p for clave, p in REM_FIJOS if clave in baja), None)
+                if prod:
+                    it.update(producto=prod, anio=0, orden=1, periodo="vigente",
+                              periodo_incierto=False)
+            if it["producto"] is None:
+                it["producto"] = _slug(fila, 12) or "archivo"
+            if _roto(m.group(1)):
+                it["href_roto_en_la_fuente"] = True
+            if esquema:
+                it["esquema_corregido_por_guarismo"] = "http->https"
+            salida.append(it)
     return salida
 
 
@@ -1769,6 +1894,7 @@ ETIQUETADORES = {
     "deuda_ant": etiquetar_deuda_ant,
     "sagyp": etiquetar_sagyp,
     "solo_pagina": etiquetar_solo_pagina,
+    "rem": etiquetar_rem,
     "itcrm_metodologias": etiquetar_itcrm_metodologias,
     "colocaciones": etiquetar_colocaciones,
     "cronograma_licitaciones": etiquetar_cronograma_licitaciones,
