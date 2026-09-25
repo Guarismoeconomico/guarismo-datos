@@ -4,18 +4,17 @@ No escribe en R2. No sella. No guarda estado. No usa secretos. Corre una vez
 y reporta. Se borra junto con .github/workflows/sonda-usda.yml cuando se
 decida como se cablean PSD y GAIN (cola 5 del Tablero).
 
-VUELTA 1 (commit fc6a4ab295): el runner entra a apps.fas.usda.gov y a
-gain.fas.usda.gov; www.fas.usda.gov le da 403.
+VUELTA 1 (fc6a4ab295): el runner entra a apps.fas.usda.gov y gain.fas.usda.gov;
+    www.fas.usda.gov da 403.
+VUELTA 2 (e199c11955): la app habla con https://apps.fas.usda.gov/newgainapi/api.
+VUELTA 3 (f4561f2f64): los servicios arman la ruta como
+        this.endpoint = apiEndpoint + '/Report/'   y despues   this.endpoint + 'Metodo'
+    Por eso los nombres no salian. El token es client_credentials con un
+    secreto que viene del login eAuth: es para usuarios del FAS.
 
-VUELTA 2 (commit e199c11955): la aplicacion GAIN habla con
-    https://apps.fas.usda.gov/newgainapi/api      (y .../newgainapi/token)
-por dos controladores, Report/ y Lookup/. Los NOMBRES de los metodos se pegan
-en el codigo aparte, por eso no salieron.
-
-VUELTA 3 (esta): muestra el CODIGO ALREDEDOR de cada uso de Report/, Lookup/,
-token y Authorization en main-es2018.js, para leer que metodo lista informes,
-con que parametros, y si pide token. Solo el script propio de la aplicacion:
-nada de Google. No llama a ninguna ruta de la API.
+VUELTA 4 (esta): lista CADA "this.endpoint + 'Metodo'" con el controlador de
+su servicio, y el codigo alrededor de "Search" y "Published", para encontrar
+el metodo PUBLICO que lista informes. No llama a ninguna ruta de la API.
 """
 
 import hashlib
@@ -26,14 +25,12 @@ import requests
 UA = {"User-Agent": "Guarismo/1.0 (+https://guarismo.com.ar; infoguarismo@gmail.com)"}
 TIMEOUT = 90
 SCRIPT = "https://gain.fas.usda.gov/main-es2018.js"
-BUSCAR = [r"Report/", r"Lookup/", r"newgainapi/token", r"grant_type",
-          r"Authorization", r"Bearer", r"DownloadReportByFileName"]
-ANCHO = 220
-MAXIMO = 25
+ANCHO = 260
+MAXIMO = 20
 
 
 def main():
-    print("[sonda-usda v3] ¿con que metodo lista informes la app GAIN? · solo lectura")
+    print("[sonda-usda v4] metodos de la API GAIN, por controlador · solo lectura")
     try:
         r = requests.get(SCRIPT, headers=UA, timeout=TIMEOUT)
     except Exception as e:
@@ -43,27 +40,36 @@ def main():
     print(f"   {r.status_code}  {len(b)} bytes  sha {hashlib.sha256(b).hexdigest()[:12]}  {SCRIPT}")
     js = b.decode("utf-8", "replace")
 
-    print("\n== Nombres de metodo pegados a Report/ o Lookup/")
-    nombres = sorted(set(re.findall(r'["\'`](?:Report|Lookup|ReportSchedule)/[A-Za-z0-9_]+', js)))
-    for n in nombres:
-        print(f"   {n.strip(chr(34)+chr(39)+'`')}")
+    # Cada servicio: "this.endpoint = ...apiEndpoint + '/Controlador/'" y, hasta el
+    # proximo servicio, sus "this.endpoint + 'Metodo'".
+    cortes = [(m.start(), m.group(1)) for m in re.finditer(
+        r"this\.endpoint\s*=\s*[A-Za-z0-9_\.]*apiEndpoint\s*\+\s*['\"]/?([A-Za-z]+)/?['\"]", js)]
+    print(f"\n== Servicios con endpoint propio: {len(cortes)}")
+    por_ctrl = {}
+    for k, (ini, ctrl) in enumerate(cortes):
+        fin = cortes[k + 1][0] if k + 1 < len(cortes) else len(js)
+        bloque = js[ini:fin]
+        for m in re.finditer(r"this\.endpoint\s*\+\s*['\"`]([A-Za-z0-9_]+)(\??[^'\"`]{0,60})", bloque):
+            por_ctrl.setdefault(ctrl, set()).add(m.group(1) + m.group(2))
+    for ctrl in sorted(por_ctrl):
+        print(f"\n   {ctrl}/")
+        for met in sorted(por_ctrl[ctrl]):
+            print(f"      {met}")
 
-    for patron in BUSCAR:
-        vistos = set()
+    for patron in (r"Search", r"Published", r"getSummaryData"):
+        vistos, n = set(), 0
         ocurr = [m.start() for m in re.finditer(patron, js)]
-        print(f"\n== {patron}  ({len(ocurr)} ocurrencias; se muestran hasta {MAXIMO} distintas)")
-        n = 0
+        print(f"\n== {patron}  ({len(ocurr)} ocurrencias; hasta {MAXIMO} distintas)")
         for i in ocurr:
-            trozo = js[max(0, i - ANCHO // 2): i + ANCHO // 2].replace("\n", " ")
-            clave = re.sub(r"\s+", " ", trozo)
-            if clave in vistos:
+            t = re.sub(r"\s+", " ", js[max(0, i - ANCHO // 2): i + ANCHO // 2])
+            if t in vistos:
                 continue
-            vistos.add(clave)
-            print(f"   …{clave}…")
+            vistos.add(t)
+            print(f"   …{t}…")
             n += 1
             if n >= MAXIMO:
                 break
-    print("\n[sonda-usda v3] fin. No se llamo a ninguna ruta de la API.")
+    print("\n[sonda-usda v4] fin. No se llamo a ninguna ruta de la API.")
     return 0
 
 
