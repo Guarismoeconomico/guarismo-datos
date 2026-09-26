@@ -1,0 +1,26 @@
+name: Sonda vida 19.4 (DESCARTABLE)
+
+# DESCARTABLE. Reconocimiento de solo lectura para la consulta 19.4: ¿que
+# devuelve cada fuente de la mecanica D cuando esta viva, cuando la pagina no
+# existe, y cuando el mes de SAGyP esta vacio? No escribe en R2 ni en
+# Supabase. No usa secretos. Se borra junto con sonda_vida.py.
+#
+# Sin schedule: se dispara a mano y nada mas.
+
+on:
+  workflow_dispatch:
+
+jobs:
+  sonda:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - run: pip install requests
+
+      - name: Sondear las paginas de la mecanica D
+        run: python sonda_vida.py
