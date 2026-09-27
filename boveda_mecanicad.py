@@ -293,6 +293,46 @@ MOTOR COMUN, ETIQUETADOR POR FUENTE
         nueva. Si los bytes son los mismos que tiene la B por la URL vieja, el
         manifiesto de las dos lo muestra (mismo sha).
 
+    (16) UN LISTADO VACIO SUENA — consulta 19.4 -> B, 26-sep-2026.
+        El 25-sep a las 19:15 magyp devolvio, con status 200, una pagina de
+        9.521 bytes que decia "El contenido de la pagina no se encuentra
+        disponible por el momento". El modulo la archivo como listado NUEVO,
+        guardo en el estado la firma de una lista VACIA y conto 0 huecos.
+
+        Leido el codigo, no era solo SAGyP: bajar() acepta cualquier 200
+        cuando pide una PAGINA, y los 15 etiquetadores devuelven 0 sobre una
+        pagina de error sin levantar nada. En las 15 fuentes pasaba lo mismo:
+          - por listado: se archivaba el error como listado y se pisaba el
+            estado con la firma vacia;
+          - por modified_time: la pagina de error no trae fecha, caia al
+            gatillo por hash y quedaba NUEVO; al volver la real, NUEVO otra
+            vez con la fecha vieja. Dos "publicaciones" falsas en la serie de
+            puntualidad;
+          - y ese dia no se miraba ningun archivo, sin hueco.
+
+        AHORA: antes de decidir nada, se bajan las paginas de la fuente y se
+        les toma la PRUEBA DE VIDA:
+          - por defecto, PAGINA POR PAGINA: cada una tiene que traer al menos
+            un link. Unica excepcion: el mes en curso de las fuentes por mes
+            (SAGyP), que puede estar vacio con razon — el 1-nov-2026 es
+            domingo y el primer jueves es el 5. Si TODAS dan cero, cae la
+            fuente entera, mes en curso incluido. (La primera version sumaba
+            por fuente; la prueba mostro que con una sola pagina de noticias
+            caida la suma no era cero y el error pasaba como listado.)
+          - "vida": "modified_time" para la que no tiene links por diseño
+            (el calendario del BCRA): la pagina tiene que declarar su fecha.
+        Una pagina que no la pasa: HUECO (sin listado). Las demas de la misma
+        fuente siguen como siempre. La pagina se archiva APARTE, con
+        clave {pagina}_sin_listado, como evidencia de la caida — identificada
+        como error, nunca como listado. Su estado NO se toca: cuando vuelve,
+        vuelve "sin cambios", y la puntualidad queda limpia. Si no quedo
+        ninguna pagina viva, los archivos de ese dia no se intentan: sus URLs
+        salen de la pagina.
+
+        Mismo modelo que boveda_privadas.py, que ya contaba "CERO entradas"
+        como pagina omitida. Un etiquetador que levanta error sigue siendo
+        HUECO (etiquetador), como antes (11).
+
 LO QUE NO HACE
     No descomprime los .zip ni los .rar del fiscal. Se archiva el objeto que
     publico el organismo, tal cual. Descomprimir seria producir un artefacto
@@ -528,6 +568,8 @@ FUENTES = {
         "desc": "BCRA — calendario de informes (fechas previstas de publicacion)",
         "etiquetador": "solo_pagina",
         "organismo": "Banco Central de la Republica Argentina",
+        # (16): no tiene links por diseño; su prueba de vida es la fecha.
+        "vida": "modified_time",
     },
     "bcra_rem": {
         # La pagina del REM se REESCRIBE cada mes: resumen ejecutivo nuevo y
@@ -1953,6 +1995,43 @@ def paginas_de(fuente, cfg, ahora):
     return salida
 
 
+def prueba_de_vida(cfg, bajadas):
+    """Ver (16). Devuelve {clave_pagina: motivo} de las paginas SIN listado.
+
+    `bajadas` es {clave_pagina: (resultado, capturado, url_pag, mes)}, en el
+    orden de paginas_de() (el mes en curso primero); resultado es
+    (bytes, headers, url_final) o la excepcion de bajar().
+
+    Solo juzga las paginas que SE BAJARON: las que fallaron ya son HUECO
+    (pagina), como siempre. Si un etiquetador levanta error, la fuente no
+    se juzga aca: eso ya suena como HUECO (etiquetador), ver (11).
+    """
+    vivas = {cl: (r, u, m) for cl, (r, _c, u, m) in bajadas.items()
+             if not isinstance(r, Exception)}
+    if not vivas:
+        return {}
+    if cfg.get("vida") == "modified_time":
+        return {cl: "sin article:modified_time"
+                for cl, ((b, _h, _f), _u, _m) in vivas.items()
+                if not modified_time(b.decode("utf-8", errors="replace"))}
+    links = {}
+    for cl, ((b, _h, _f), u, _m) in vivas.items():
+        try:
+            links[cl] = len(ETIQUETADORES[cfg["etiquetador"]](
+                b.decode("utf-8", errors="replace"), u))
+        except Exception:
+            return {}
+    if not sum(links.values()):
+        return {cl: f"0 links en las {len(vivas)} pagina(s) de la fuente"
+                for cl in vivas}
+    # El mes en curso de una fuente por mes puede estar vacio con razon.
+    en_curso = (next(iter(bajadas.values()))[3]
+                if cfg.get("paginas_por_mes") else None)
+    return {cl: "0 links en esta pagina (las otras de la fuente si traen)"
+            for cl, n in links.items()
+            if n == 0 and not (en_curso and vivas[cl][2] == en_curso)}
+
+
 def firma_listado(items):
     """sha256 de la LISTA publicada: pares (url, etiqueta), ordenados.
 
@@ -2283,10 +2362,59 @@ def main(argv=None):
         # y hace exactamente lo de antes. SAGyP son dos (mes en curso y mes
         # anterior), cada una con su clave de estado. Ver paginas_de().
         items, paginas_ok, ent_pag = [], 0, None
+
+        # --- 0. prueba de vida, ver (16) ---
+        # Se bajan TODAS las paginas de la fuente antes de decidir nada: saber
+        # si una pagina vacia es error depende de las otras (el mes en curso
+        # de SAGyP). Mismo orden y mismos pedidos que antes; solo cambia
+        # cuando se decide.
+        bajadas = {}
         for cl_pag, url_pag, mes_pag in paginas_de(fuente, cfg, ahora):
             capturado = datetime.now(timezone.utc).isoformat(timespec="seconds")
             try:
-                pagina_b, headers, url_final = bajar(url_pag, "html")
+                bajadas[cl_pag] = (bajar(url_pag, "html"), capturado, url_pag,
+                                   mes_pag)
+            except Exception as e:
+                bajadas[cl_pag] = (e, capturado, url_pag, mes_pag)
+        sin_listado = prueba_de_vida(cfg, bajadas)
+        for cl_pag, motivo_vida in sin_listado.items():
+            res, capturado, url_pag, _m = bajadas[cl_pag]
+            pagina_b, headers, url_final = res
+            sha_pag = hashlib.sha256(pagina_b).hexdigest()
+            clave_ev = f"{cl_pag}_sin_listado"
+            objeto = guardar(s3, bucket, sello, ahora, clave_ev, pagina_b,
+                             "html", url_pag, capturado, sha_pag, seco)
+            huecos += 1
+            entradas.append({
+                "fuente": fuente, "tipo": "pagina_sin_listado",
+                "url": url_pag, "capturado_utc": capturado,
+                "bytes": len(pagina_b), "sha256": sha_pag,
+                "http_date": headers.get("Date"),
+                "last_modified": headers.get("Last-Modified"),
+                "etag": headers.get("ETag"),
+                "content_type": headers.get("Content-Type"),
+                "article_modified_time": modified_time(
+                    pagina_b.decode("utf-8", errors="replace")),
+                "error": f"sin listado: {motivo_vida}",
+                "objeto": objeto,
+                "nota": ("la fuente respondio pero no publico su listado; se "
+                         "archiva como evidencia, NO como listado, y el "
+                         "estado no se toca"),
+            })
+            print(f"   [mecD] {cl_pag:<30} HUECO (sin listado) — "
+                  f"{len(pagina_b)} bytes, {motivo_vida}. "
+                  + ("SECO: no se archiva" if seco else
+                     "Archivada aparte como evidencia")
+                  + "; el estado no se toca")
+
+        for cl_pag, url_pag, mes_pag in paginas_de(fuente, cfg, ahora):
+            if cl_pag in sin_listado:
+                continue
+            res, capturado, _u, _m = bajadas[cl_pag]
+            try:
+                if isinstance(res, Exception):
+                    raise res
+                pagina_b, headers, url_final = res
             except Exception as e:
                 huecos += 1
                 entradas.append({"fuente": fuente, "url": url_pag,
