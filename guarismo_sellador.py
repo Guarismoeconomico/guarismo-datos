@@ -60,14 +60,46 @@ Ahora:
     termina en ROJO y no se publica: ese .ots no prueba lo escrito.
   - si el día quedó sin .ots (el anclaje falló) y la raíz no cambió, se ancla
     ahora. Para eso sirve la segunda corrida.
+
+
+EL .bak CONGELABA LOS SELLOS — 25-sep-2026 (consulta 19.3 -> B)
+---------------------------------------------------------------
+`ots upgrade X.ots` renombra el original a X.ots.bak antes de escribir el
+nuevo, y si X.ots.bak YA EXISTE sale con código 1 sin actualizar nada
+(opentimestamps-client 0.7.2, cmds.py). Como el .bak se commiteaba, cada sello
+se completaba UNA sola vez —el primer upgrade, unas horas después de nacer— y
+después quedaba congelado: los calendarios que no habían anclado todavía no
+entraban nunca. El error no se veía (continue-on-error, y nadie miraba el
+código de salida).
+
+Medido el 25-sep sobre los 69 sellos publicados: todos tienen al menos una
+atestación de Bitcoin, pero 11 quedaron con una sola de cuatro posibles. Si el
+primer upgrade llegaba antes que cualquier anclaje, el día quedaba sin
+Bitcoin para siempre.
+
+Ahora el upgrade se hace sobre una COPIA en una carpeta temporal. El .bak nace
+y muere ahí. El .ots de sellos/ se reemplaza solo si:
+  - cambió;
+  - sigue probando el MISMO archivo (el "File sha256 hash" de `ots info` es
+    el del .json de al lado), y
+  - no pierde atestaciones de Bitcoin.
+Si alguna guarda falla, el .ots queda como estaba y el log lo dice.
+
+Los .ots.bak que ya están publicados NO se tocan: son registro público.
+Consecuencia visible: desde este cambio, el commit de un día puede agrandar el
+.ots de días ANTERIORES. Nunca un .json.
 """
 
 import datetime as dt
 import hashlib
 import json
+import os
 import pathlib
+import re
+import shutil
 import subprocess
 import sys
+import tempfile
 
 import requests
 
@@ -214,8 +246,19 @@ def sellar() -> int:
     return 0
 
 
+def _info(ots: pathlib.Path):
+    """(hash que prueba, atestaciones de Bitcoin) según `ots info`, sin red."""
+    r = subprocess.run(["ots", "info", str(ots)],
+                       capture_output=True, text=True, timeout=60)
+    m = re.search(r"File sha256 hash: ([0-9a-f]{64})", r.stdout)
+    return (m.group(1) if m else None), r.stdout.count("BitcoinBlockHeaderAttestation")
+
+
 def actualizar() -> int:
-    """Completa los sellos pendientes una vez que Bitcoin los confirmó."""
+    """Completa los sellos pendientes a medida que Bitcoin los confirma.
+
+    Sobre una copia: ver "EL .bak CONGELABA LOS SELLOS" en el encabezado.
+    """
     print("=" * 62)
     print("  GUARISMO — Actualización de sellos")
     print("=" * 62)
@@ -224,26 +267,58 @@ def actualizar() -> int:
         print("\n  (todavía no hay sellos)")
         return 0
 
-    pendientes = sorted(DIR_SELLOS.glob("*.json.ots"))
-    if not pendientes:
+    sellos = sorted(DIR_SELLOS.glob("*.json.ots"))
+    if not sellos:
         print("\n  (no hay archivos .ots)")
         return 0
 
-    for p in pendientes:
-        print(f"\n▸ {p.name}")
+    crecieron = iguales = rechazados = 0
+    for p in sellos:
+        js = p.with_name(p.name[:-len(".ots")])
         try:
-            r = subprocess.run(["ots", "upgrade", str(p)],
-                               capture_output=True, text=True, timeout=120)
-            for linea in (r.stdout + r.stderr).strip().splitlines():
-                print(f"   {linea}")
+            antes_b = p.read_bytes()
+            sha_json = hashlib.sha256(js.read_bytes()).hexdigest() if js.exists() else None
+            prueba_antes, btc_antes = _info(p)
+            with tempfile.TemporaryDirectory() as d:
+                copia = pathlib.Path(d) / p.name
+                copia.write_bytes(antes_b)
+                r = subprocess.run(["ots", "upgrade", str(copia)],
+                                   capture_output=True, text=True, timeout=120)
+                despues_b = copia.read_bytes()
+                if despues_b == antes_b:
+                    iguales += 1
+                    continue
+                prueba, btc = _info(copia)
+                motivo = None
+                if prueba is None or prueba != prueba_antes:
+                    motivo = "la copia prueba OTRO contenido"
+                elif sha_json is not None and prueba != sha_json:
+                    motivo = "la copia no prueba el .json de al lado"
+                elif btc < btc_antes:
+                    motivo = f"perdería atestaciones ({btc_antes} -> {btc})"
+                if motivo:
+                    rechazados += 1
+                    print(f"\n▸ {p.name}  ⚠ NO SE REEMPLAZA: {motivo}")
+                    for linea in (r.stdout + r.stderr).strip().splitlines():
+                        print(f"   {linea}")
+                    continue
+                # Reemplazo atómico, desde la misma carpeta: nada queda a medias
+                # ni suelto en sellos/.
+                tmp = p.with_name(p.name + ".tmp")
+                tmp.write_bytes(despues_b)
+                os.replace(tmp, p)
+                crecieron += 1
+                print(f"\n▸ {p.name}  ✓ {len(antes_b)} -> {len(despues_b)} bytes · "
+                      f"Bitcoin {btc_antes} -> {btc}")
         except FileNotFoundError:
             print("   ⚠ 'ots' no está instalado.")
             return 0
         except Exception as e:
-            print(f"   ⚠ {e}")
+            print(f"\n▸ {p.name}  ⚠ {e}")
 
     print("\n" + "=" * 62)
-    print("  ✓ listo")
+    print(f"  ✓ listo · {crecieron} crecieron · {iguales} sin cambios · "
+          f"{rechazados} rechazados")
     print("=" * 62)
     return 0
 
