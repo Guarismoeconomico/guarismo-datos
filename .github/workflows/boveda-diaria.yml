@@ -6,7 +6,13 @@ name: Guarismo boveda diaria
 #
 # OJO: los cinco primeros escriben en guarismo-crudo; el sexto escribe en
 # guarismo-reservado con OTRAS credenciales. La separacion es de CREDENCIAL,
-# no de convencion: ver el comentario del paso de privadas al final.
+# no de convencion: ver el comentario del paso de privadas.
+#
+# Despues de los seis modulos corre UN PASO MAS que no captura nada: el
+# ANCLAJE de la boveda (anclar_boveda.py, desde el 14-oct-2026). Hashea lo que
+# los modulos escribieron hoy en guarismo-crudo y deja una fila en
+# guarismo_historico, bucket "boveda", para que el sello de la noche cubra
+# tambien la boveda. Ver el comentario de ese paso al final.
 #
 # Por que agrupado por CADENCIA y no por fuente: un workflow por modulo son
 # doce relojes en dos meses, y el dia que se regenere el PAT hay que tocarlos
@@ -178,3 +184,41 @@ jobs:
           R2_RESERVADO_ACCESS_KEY_ID: ${{ secrets.R2_RESERVADO_ACCESS_KEY_ID }}
           R2_RESERVADO_SECRET_ACCESS_KEY: ${{ secrets.R2_RESERVADO_SECRET_ACCESS_KEY }}
         run: python boveda_privadas.py
+
+      # Anclaje de la boveda: lo que escribieron los modulos de arriba entra
+      # en la cadena de guarismo_historico (bucket "boveda") y, con eso, en el
+      # sello de la noche. Desde el 14-oct-2026 (consulta 21.7 -> A).
+      #
+      # POR QUE VA ULTIMO Y CON if: always()
+      #   Ancla lo que haya en R2 al terminar la corrida, haya fallado un
+      #   modulo o no. Un modulo caido deja un hueco; el anclaje igual tiene
+      #   que cubrir lo que SI se escribio hoy. Si no hay nada nuevo (ningun
+      #   modulo escribio), dice "nada nuevo que anclar" y termina en 0: no es
+      #   un error, es un dia sin publicaciones.
+      #
+      # QUE ESCRIBE: un anclaje JSON + sidecar .sha256 en
+      #   boveda/anclajes/AAAA/MM/ y UNA fila en guarismo_historico. Si el
+      #   anclaje no se pudo escribir en R2, no toca Supabase y sale en 1. Si
+      #   quedo en R2 y la fila NO entro, lo dice en el log y sale en 1: la
+      #   corrida de manana vuelve a cubrir esos objetos.
+      #
+      # SIN continue-on-error: si falla, el job queda en ROJO y la alerta
+      # suena. Un dia sin anclaje es un dia que el sello no cubre.
+      #
+      # Lleva las credenciales del archivo PUBLICABLE (R2_*) y las de Supabase
+      # (SUPABASE_KEY, la service_role: la fila se inserta con ella, como hace
+      # el conector). NUNCA R2_RESERVADO_*: el almacen reservado se ancla en
+      # otra vuelta, con otra decision.
+      #
+      # El anclaje INICIAL (toda la boveda, 1770 objetos) se hizo a mano el
+      # 14-oct-2026 con anclar-boveda.yml. Este paso solo ancla lo nuevo.
+      - name: Anclar la boveda en guarismo_historico
+        if: always()          # ancla lo que haya, aunque un modulo haya fallado
+        env:
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET: guarismo-crudo
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        run: python anclar_boveda.py
