@@ -1,0 +1,89 @@
+name: Guarismo anclar boveda (manual)
+
+# Workflow MANUAL del anclaje de la boveda (anclar_boveda.py). NO tiene reloj
+# y no lo va a tener: el anclaje de regimen corre como ULTIMO paso de
+# boveda-diaria.yml, recien cuando este workflow haya probado el script.
+#
+# POR QUE EXISTE
+#   Hasta el 14-oct-2026 el sello diario (guarismo_sellador.py) solo cubria la
+#   cadena de la vitrina (guarismo_historico, buckets oficial y agregador). Los
+#   objetos de la boveda en R2 (boveda/<modulo>/AAAA/MM/...) NO entraban en
+#   ninguna raiz. Este script lista la boveda, calcula el sha256 de cada
+#   objeto, escribe un anclaje JSON en R2 (boveda/anclajes/AAAA/MM/) e inserta
+#   UNA fila en guarismo_historico, bucket "boveda", con el sha del anclaje.
+#   Cuando el sellador sume ese bucket, la raiz diaria cubre tambien la boveda.
+#
+# ORDEN DE USO — de menos a mas irreversible
+#   1. modo=seco-inicial → lista TODA la boveda, hashea e informa. NO escribe
+#                          un byte ni en R2 ni en Supabase. Se lee el log.
+#   2. modo=inicial      → UNA sola vez. Escribe el anclaje de todo lo que hay
+#                          y la primera fila del bucket "boveda". El script se
+#                          niega a correr si ya existe un anclaje previo.
+#   3. modo=seco-diario  → simula el anclaje de regimen: solo lo nuevo desde
+#                          el ultimo anclaje. No escribe nada.
+#   4. modo=diario       → anclaje de regimen a mano. En uso normal lo corre
+#                          boveda-diaria.yml, no este workflow.
+#   (recien despues)     → sumar "boveda" al sellador y al verificador, y el
+#                          paso final en boveda-diaria.yml.
+#
+# QUE MIRAR EN EL LOG
+#   · "listados: N objetos bajo boveda/" — N tiene que parecerse a lo que
+#     muestra el panel de R2 para ese prefijo (sin contar boveda/anclajes/).
+#   · "sha256 calculados: N objetos · X MB" — el mismo N.
+#   · "ultimo anclaje: id=... " o "sin anclaje previo" — tiene que coincidir
+#     con lo que se espera para el modo elegido.
+#   · En seco termina en "SECO: no se escribio nada en R2 ni en Supabase".
+#   · En diario, "nada nuevo que anclar" es el resultado normal de un dia sin
+#     capturas nuevas. No es un error.
+#   · Cualquier linea que empiece con ✗ corta la corrida: exit 2 es un error
+#     de uso (faltan variables, modo equivocado); exit 1 es un fallo de
+#     escritura, y el log dice si quedo algo a medias.
+
+on:
+  workflow_dispatch:
+    inputs:
+      modo:
+        description: "seco-inicial = no escribe · inicial = UNA vez, escribe todo · seco-diario = no escribe · diario = solo lo nuevo"
+        required: true
+        default: seco-inicial
+        type: choice
+        options:
+          - seco-inicial
+          - inicial
+          - seco-diario
+          - diario
+
+permissions:
+  contents: read
+
+jobs:
+  anclar:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - run: pip install requests boto3
+
+      - name: Anclar la boveda
+        env:
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET: guarismo-crudo
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          MODO: ${{ inputs.modo }}
+        run: |
+          ARGS=""
+          case "$MODO" in
+            seco-inicial) ARGS="--seco --inicial" ;;
+            inicial)      ARGS="--inicial" ;;
+            seco-diario)  ARGS="--seco" ;;
+            diario)       ARGS="" ;;
+          esac
+          echo "modo=$MODO  args=$ARGS"
+          python anclar_boveda.py $ARGS
