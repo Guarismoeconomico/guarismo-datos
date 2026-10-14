@@ -62,23 +62,26 @@ Ahora:
     ahora. Para eso sirve la segunda corrida.
 
 
-EL .bak CONGELABA LOS SELLOS — 25-sep-2026 (consulta 19.3 -> B)
----------------------------------------------------------------
-`ots upgrade X.ots` renombra el original a X.ots.bak antes de escribir el
-nuevo, y si X.ots.bak YA EXISTE sale con código 1 sin actualizar nada
-(opentimestamps-client 0.7.2, cmds.py). Como el .bak se commiteaba, cada sello
-se completaba UNA sola vez —el primer upgrade, unas horas después de nacer— y
-después quedaba congelado: los calendarios que no habían anclado todavía no
-entraban nunca. El error no se veía (continue-on-error, y nadie miraba el
-código de salida).
+EL UPGRADE SE HACE SOBRE UNA COPIA — 25-sep-2026 (consulta 19.3 -> B)
+-----------------------------------------------------------------------
+Corregido el 14-oct-2026 (consulta 21.2 -> A). Este encabezado decía antes
+que "el .bak congelaba los sellos". Era falso.
 
-Medido el 25-sep sobre los 69 sellos publicados: todos tienen al menos una
-atestación de Bitcoin, pero 11 quedaron con una sola de cuatro posibles. Si el
-primer upgrade llegaba antes que cualquier anclaje, el día quedaba sin
-Bitcoin para siempre.
+Lo que se creyó el 25-sep: `ots upgrade X.ots` renombra el original a
+X.ots.bak y, si el .bak YA EXISTE, sale con código 1 sin actualizar nada
+(opentimestamps-client 0.7.2, cmds.py). Como el .bak se commiteaba, se dedujo
+que cada sello se completaba una sola vez y después quedaba congelado.
 
-Ahora el upgrade se hace sobre una COPIA en una carpeta temporal. El .bak nace
-y muere ahí. El .ots de sellos/ se reemplaza solo si:
+Lo que mostró la primera corrida real, el 3-oct-2026: `0 crecieron · 77 sin
+cambios`. El .bak no congelaba nada. El cliente 0.7.2 deja de consultar los
+calendarios en cuanto el sello tiene UNA atestación de Bitcoin
+(`is_timestamp_complete`). Por eso, de los 88 sellos, 11 tienen una sola de
+cuatro posibles: no es un defecto de la prueba, una atestación de Bitcoin
+basta. Los sellos no estaban rotos; la hipótesis estaba equivocada.
+
+Lo que sí queda de ese cambio, y vale: el upgrade se hace sobre una COPIA en
+una carpeta temporal. El .bak nace y muere ahí. El .ots de sellos/ se
+reemplaza solo si:
   - cambió;
   - sigue probando el MISMO archivo (el "File sha256 hash" de `ots info` es
     el del .json de al lado), y
@@ -86,8 +89,26 @@ y muere ahí. El .ots de sellos/ se reemplaza solo si:
 Si alguna guarda falla, el .ots queda como estaba y el log lo dice.
 
 Los .ots.bak que ya están publicados NO se tocan: son registro público.
-Consecuencia visible: desde este cambio, el commit de un día puede agrandar el
-.ots de días ANTERIORES. Nunca un .json.
+Consecuencia visible: el commit de un día puede agrandar el .ots de días
+ANTERIORES que todavía no tengan Bitcoin. Nunca un .json.
+
+
+LA BÓVEDA ENTRA EN LA RAÍZ — 14-oct-2026 (consulta 21.7 -> A)
+-------------------------------------------------------------
+Hasta el 14-oct-2026 la raíz resumía solo las cadenas de la vitrina (buckets
+`oficial` y `agregador`, en guarismo_historico). Los objetos de la bóveda en
+R2 (boveda/<modulo>/AAAA/MM/...) no entraban en ningún sello: los 88 sellos
+anteriores prueban la vitrina, no la bóveda.
+
+anclar_boveda.py lista la bóveda, calcula el sha256 de cada objeto, escribe
+un anclaje JSON en R2 (boveda/anclajes/AAAA/MM/) e inserta UNA fila en
+guarismo_historico, bucket `boveda`, con el sha del anclaje. Anclaje inicial:
+14-oct-2026, 1770 objetos, fila id=1198 (génesis de ese bucket). En régimen
+corre como último paso de boveda-diaria.yml y ancla solo lo nuevo del día.
+
+Desde el primer sello posterior a este cambio, `cabezas` tiene tres entradas
+en vez de dos, y la raíz cubre también la bóveda. Los sellos anteriores no se
+tocan: un día anclado no se reescribe.
 """
 
 import datetime as dt
@@ -106,7 +127,7 @@ import requests
 SUPABASE_URL = "https://rudepkizcatkhqprqjfw.supabase.co"
 ANON_KEY = "sb_publishable_nwqxJVCewzhySYY1JZ6Lxw_DhbY0w8J"
 
-BUCKETS = ("oficial", "agregador")
+BUCKETS = ("oficial", "agregador", "boveda")   # boveda desde el 14-oct-2026
 DIR_SELLOS = pathlib.Path("sellos")
 TIMEOUT = 30
 
@@ -257,7 +278,7 @@ def _info(ots: pathlib.Path):
 def actualizar() -> int:
     """Completa los sellos pendientes a medida que Bitcoin los confirma.
 
-    Sobre una copia: ver "EL .bak CONGELABA LOS SELLOS" en el encabezado.
+    Sobre una copia: ver "EL UPGRADE SE HACE SOBRE UNA COPIA" en el encabezado.
     """
     print("=" * 62)
     print("  GUARISMO — Actualización de sellos")
