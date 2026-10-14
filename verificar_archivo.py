@@ -142,7 +142,9 @@ def main() -> int:
     print("=" * 66)
 
     total_errores = 0
-    for bucket in ("oficial", "agregador"):
+    # "boveda": una fila por anclaje de la bóveda en R2 (anclar_boveda.py).
+    # Su cadena arranca el 2026-10-14; antes, la bóveda no entraba en el sello.
+    for bucket in ("oficial", "agregador", "boveda"):
         print(f"\n▸ Bucket '{bucket}'")
         try:
             filas = bajar_filas(bucket)
