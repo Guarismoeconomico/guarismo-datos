@@ -1,0 +1,50 @@
+name: Guarismo medir datosgob (manual, solo lectura)
+
+# Workflow MANUAL de medir_datosgob.py. NO tiene reloj y no lo va a tener.
+#
+# POR QUE EXISTE (consulta 21.8, 28-oct-2026)
+#   El 13 y el 14-oct-2026 datos.gob.ar devolvio series recortadas y
+#   boveda_datosgob.py las archivo como OK. La guardia nueva (commit 7fdee6d)
+#   protege de aca en adelante. Este workflow mide el PASADO: recorre todos
+#   los snapshots bajo boveda/datosgob/ y lista, serie por serie y dia por
+#   dia, cuales llegaron recortados o con otro rango, mas la integridad de
+#   cada objeto contra su sidecar .sha256.
+#
+# SOLO LECTURA
+#   Lleva solo las credenciales R2_* (las mismas con las que la diaria ya
+#   lista la boveda). NO lleva SUPABASE_*. El script no tiene ninguna llamada
+#   que escriba: lista y lee, nada mas.
+#
+# QUE MIRAR EN EL LOG
+#   · "N snapshots · <primero> … <ultimo>" — el primero tiene que ser del
+#     1-sep-2026 y el ultimo de la corrida mas reciente.
+#   · "integridad: N/N con sidecar que coincide" — cualquier ⚠ ahi es grave.
+#   · Por serie, la linea de tiempo y los ⚠ con su motivo.
+#   · El RESUMEN del final: la lista de snapshots afectados es lo que el motor
+#     de informes va a tener que reconocer como captura fallida.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  medir:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - run: pip install boto3
+
+      - name: Medir datos.gob hacia atras (solo lectura)
+        env:
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET: guarismo-crudo
+        run: python medir_datosgob.py
