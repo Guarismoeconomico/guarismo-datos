@@ -33,6 +33,16 @@ QUE IMPRIME
     3. Un resumen final: series limpias, series con sospechosos y la lista
        de snapshots afectados (los que el motor de informes tiene que saber
        reconocer como captura fallida).
+    4. HUELLAS (consulta 22.18, 29-oct-2026). El paso 2 mira cuantos puntos
+       y que rango; no mira los VALORES. El backend viejo de datos.gob parece
+       una copia vieja: podria servir la serie con el mismo n y valores
+       viejos. Por eso, por serie, se le pone una letra a cada sha256_puntos
+       distinto (A, B, C… en orden de aparicion) y se imprime la linea de
+       dias. Una huella que VUELVE despues de otra (A -> B -> A) es VAIVEN:
+       la fuente sirvio una version anterior. Cada cambio de huella se
+       explica: puntos nuevos, quitados y valores revisados, con fechas.
+       Ademas se recalcula cada huella desde sus puntos (control interno:
+       si no coincide en TODOS, sospechar primero del recalculo).
 
 VARIABLES DE ENTORNO
     R2_ENDPOINT, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY   (obligatorias)
@@ -128,6 +138,8 @@ def leer_snapshot(s3, bucket, clave, sidecars):
             "hasta": f.get("hasta"),
             "error": f.get("error"),
             "degradada": bool(f.get("degradada")),
+            "sha": f.get("sha256_puntos"),
+            "puntos": f.get("puntos") or [],
         }
     return filas, estado
 
@@ -184,6 +196,113 @@ def _tramos(tiempo):
         else:
             tramos.append([sello, sello, marca])
     return tramos
+
+
+def _hash_puntos(puntos):
+    """Identica a la de boveda_datosgob.py (misma en 7a2be43 y en 7fdee6d)."""
+    crudo = json.dumps(puntos, ensure_ascii=False, sort_keys=True,
+                       separators=(",", ":"), default=str)
+    return hashlib.sha256(crudo.encode("utf-8")).hexdigest()
+
+
+def _letra(i):
+    """0 -> A, 25 -> Z, 26 -> AA."""
+    s = ""
+    i += 1
+    while i:
+        i, r = divmod(i - 1, 26)
+        s = chr(65 + r) + s
+    return s
+
+
+def _rango(fechas):
+    if not fechas:
+        return "—"
+    return fechas[0] if len(fechas) == 1 else f"{fechas[0]}…{fechas[-1]}"
+
+
+def _diferencia(a, b):
+    """Que cambio de los puntos a a los puntos b (listas [fecha, valor])."""
+    da = {p[0]: p[1] for p in a}
+    db = {p[0]: p[1] for p in b}
+    nuevos = sorted(set(db) - set(da))
+    quitados = sorted(set(da) - set(db))
+    revisados = sorted(k for k in set(da) & set(db) if da[k] != db[k])
+    return (f"+{len(nuevos)} nuevos ({_rango(nuevos)}) · "
+            f"−{len(quitados)} quitados ({_rango(quitados)}) · "
+            f"{len(revisados)} revisados ({_rango(revisados)})")
+
+
+def huellas(snapshots):
+    """Por serie: letras por huella, linea de dias, cambios, VAIVEN y
+    huellas que no se pudieron recalcular."""
+    series = sorted({s for _, _, filas in snapshots for s in filas})
+    out = {}
+    for serie in series:
+        letra, puntos_de, n_de = {}, {}, {}
+        tiempo, internas = [], []
+        for sello, clave, filas in snapshots:
+            f = filas.get(serie)
+            if f is None or f["degradada"] or not f["n"] or not f.get("sha"):
+                tiempo.append((sello, None))
+                continue
+            sha = f["sha"]
+            if _hash_puntos(f["puntos"]) != sha:
+                internas.append(sello)
+            if sha not in letra:
+                letra[sha] = _letra(len(letra))
+                puntos_de[sha] = f["puntos"]
+                n_de[sha] = f["n"]
+            tiempo.append((sello, sha))
+        cambios, vaiven, vistas, previa = [], [], set(), None
+        for sello, sha in tiempo:
+            if sha is None:
+                continue
+            if previa is not None and sha != previa:
+                txt = (f"{letra[previa]}→{letra[sha]}  n {n_de[previa]}→{n_de[sha]} · "
+                       + _diferencia(puntos_de[previa], puntos_de[sha]))
+                cambios.append((sello, txt))
+                if sha in vistas:
+                    vaiven.append((sello, f"{letra[previa]}→{letra[sha]}"))
+            vistas.add(sha)
+            previa = sha
+        out[serie] = (letra, tiempo, cambios, vaiven, internas)
+    return out
+
+
+def imprimir_huellas(snapshots):
+    print()
+    print("=" * 66)
+    print("  HUELLAS (22.18) · sha256_puntos dia por dia · SOLO LECTURA")
+    print("  letra = una huella distinta · '·' = hueco, degradada o ausente")
+    print("=" * 66)
+    info = huellas(snapshots)
+    con_vaiven, sin_vaiven, con_internas = [], [], []
+    for serie, (letra, tiempo, cambios, vaiven, internas) in info.items():
+        marca = f"VAIVEN ×{len(vaiven)}" if vaiven else "sin vaiven"
+        print(f"▸ {serie}   {len(letra)} huella(s) · {marca}")
+        seq = [(s, letra[h] if h else "·") for s, h in tiempo]
+        for desde, hasta, l in _tramos(seq):
+            rango = _dia(desde) if desde == hasta else f"{_dia(desde)}…{_dia(hasta)}"
+            print(f"      {rango:<12} {l}")
+        for sello, txt in cambios:
+            print(f"      Δ {_dia(sello)}  {txt}")
+        for sello, txt in vaiven:
+            print(f"      ⚠ VAIVEN {_dia(sello)}  {txt}: volvio una huella anterior")
+        if internas:
+            print(f"      ⚠ huella recalculada distinta en {len(internas)} snapshot(s): "
+                  + ", ".join(_dia(s) for s in internas))
+        print()
+        (con_vaiven if vaiven else sin_vaiven).append(serie)
+        if internas:
+            con_internas.append(serie)
+    print("=" * 66)
+    print(f"  HUELLAS · {len(info)} series")
+    print(f"  con VAIVEN ({len(con_vaiven)}): {', '.join(con_vaiven) or '—'}")
+    print(f"  sin vaiven ({len(sin_vaiven)}): {', '.join(sin_vaiven) or '—'}")
+    print(f"  huella recalculada distinta: {', '.join(con_internas) or 'ninguna'}")
+    print("  SOLO LECTURA: no se escribio nada en ningun lado.")
+    print("=" * 66)
 
 
 def main():
@@ -250,6 +369,7 @@ def main():
         print(f"     {clave}  ·  {', '.join(ss)}")
     print("  SOLO LECTURA: no se escribio nada en ningun lado.")
     print("=" * 66)
+    imprimir_huellas(snapshots)
     return 0
 
 
