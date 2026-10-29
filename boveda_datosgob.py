@@ -83,6 +83,26 @@ SERIE DEGRADADA — LA GUARDIA DE LA 21.8 (consulta 21.8 -> A, 14-oct-2026)
     la guardia (2) se apaga por hoy CON AVISO en el log y en el manifiesto, y
     la (1) sigue funcionando sola.
 
+VACIOS — LA GUARDIA DE LA 22.20 (consulta 22.20 -> A, 29-oct-2026)
+    La medicion hacia atras (medir_datosgob.py, commit 82e39db) mostro que del
+    11 al 18-oct el backend malo tambien mando puntos con valor VACIO (null):
+    a veces con el MISMO n y el mismo rango (emae_salud el 11-oct: 105 de 271
+    vacios), y eso las guardias (1) y (2) no lo ven. Medido en los 76
+    snapshots del 1-sep al 28-oct: las versiones sanas tienen 0 vacios
+    (desocupacion: 2, legitimos y estables); las malas, de 92 a 797.
+
+      (3) CONTRA LA REFERENCIA, mismos snapshots que la (2): por serie se toma
+          el MINIMO de vacios de la ventana, contados desde los puntos
+          archivados (no de un estado aparte). Si hoy llegan MAS vacios que
+          ese minimo, se reintenta una vez (el mismo reintento de la (1)) y si
+          sigue, degradada, con el mismo trato que la 21.8.
+
+    Asimetrica: menos vacios nunca suena. Sin referencia (primer dia de una
+    serie, o una que vuelve de una racha de huecos sin memoria) la (3) no
+    actua ese dia. Si una serie suma un vacio de verdad, va a sonar todos los
+    dias hasta que alguien lo mire, igual que la (2): la evidencia completa
+    queda en "evidencia_parcial".
+
 DETERMINISMO
     gzip mtime=0 + json sort_keys=True: mismo contenido, mismo sha256. Misma
     regla que el sellador y que crudo_r2.py.
@@ -220,6 +240,11 @@ def _hash_puntos(puntos):
     return hashlib.sha256(crudo.encode("utf-8")).hexdigest()
 
 
+def contar_vacios(puntos):
+    """22.20: cuantos puntos llegaron sin valor (null)."""
+    return sum(1 for p in puntos if len(p) < 2 or p[1] is None)
+
+
 # ---------------------------------------------------------------------------
 # 21.8 — referencia: lo mas largo que esta serie tuvo en los ultimos snapshots
 # ---------------------------------------------------------------------------
@@ -279,12 +304,15 @@ def _mejor(a, b):
         return b
     if b is None:
         return a
+    conocidos = [v for v in (a.get("vacios"), b.get("vacios")) if v is not None]
     return {
         "n": max(a["n"], b["n"]),
         "desde": min(a["desde"], b["desde"]),
         "hasta": max(a["hasta"], b["hasta"]),
         # el objeto que aporto el n mas alto, para poder ir a mirarlo
         "objeto": a.get("objeto") if a["n"] >= b["n"] else b.get("objeto"),
+        # 22.20: el MINIMO de vacios de la ventana (None si ninguno lo sabe)
+        "vacios": min(conocidos) if conocidos else None,
     }
 
 
@@ -313,7 +341,8 @@ def leer_referencia(s3, bucket, ahora):
                 continue
             if fila.get("n", 0) > 0 and fila.get("desde") and fila.get("hasta"):
                 aporte = {"n": fila["n"], "desde": fila["desde"],
-                          "hasta": fila["hasta"], "objeto": clave}
+                          "hasta": fila["hasta"], "objeto": clave,
+                          "vacios": contar_vacios(fila.get("puntos") or [])}
             elif isinstance(fila.get("referencia"), dict) and fila["referencia"].get("n"):
                 aporte = dict(fila["referencia"])
             else:
@@ -338,6 +367,10 @@ def _problema(puntos, declarado, ref):
             return f"la serie empieza en {desde} y la referencia en {ref['desde']}"
         if hasta < ref["hasta"]:
             return f"la serie termina en {hasta} y la referencia en {ref['hasta']}"
+        if ref.get("vacios") is not None:
+            v = contar_vacios(puntos)
+            if v > ref["vacios"]:
+                return f"recibi {v} puntos vacios y la referencia tiene {ref['vacios']}"
     return None
 
 
@@ -374,6 +407,7 @@ def capturar(refs=None):
                         "hasta_recibido": puntos[-1][0],
                         "intentos": intentos,
                         "sha256_evidencia": _hash_puntos(puntos),
+                        "vacios_recibidos": contar_vacios(puntos),
                     },
                     "referencia": ref,
                     "evidencia_parcial": puntos,
