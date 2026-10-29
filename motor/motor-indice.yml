@@ -1,0 +1,66 @@
+name: Guarismo motor indice (manual, solo lectura)
+
+# Workflow MANUAL de motor/indice.py: la PIEZA 1 del motor de informes.
+# NO tiene reloj y no lo va a tener.
+#
+# QUE HACE (Plan del motor, 14-oct · consultas 23.1-A y 23.3-A, 29-oct-2026)
+#   Arma el indice del archivo de datos.gob: para cada serie, todas sus
+#   capturas con fecha (UTC y ART), objeto de R2 y su sha256 (contra el
+#   sidecar y contra el anclaje), huella, n, desde, hasta, vacios, estado
+#   (OK · HUECO · DEGRADADA · FALLIDA por regla), clase y dia de sello.
+#   Imprime el resumen de las 16 series y el detalle de la serie pedida, y
+#   deja el indice completo como archivo adjunto a la corrida.
+#
+# SOLO LECTURA
+#   Lleva solo las credenciales R2_* (las mismas con las que la diaria ya
+#   lista la boveda). NO lleva SUPABASE_*. El script lista y lee; el unico
+#   archivo que escribe es indice.json, en la maquina de la corrida, que se
+#   adjunta a la corrida y no toca R2 ni el repo.
+#
+# QUE MIRAR EN EL LOG
+#   · "integridad (objeto = sidecar = anclaje): N/N" — cualquier ⚠ es grave.
+#   · "sin anclar todavia": a lo sumo el snapshot de hoy si se corre antes
+#     del anclaje de las 19:15.
+#   · El RESUMEN: FALLIDA en las 15 series de la ventana 11–18-oct.
+#   · El DETALLE: dia de sello 2026-10-15 para lo capturado hasta el 14-oct.
+
+on:
+  workflow_dispatch:
+    inputs:
+      serie:
+        description: "Serie para el detalle (ej.: emae_desest, tcrm, ripte)"
+        required: true
+        default: "emae_desest"
+
+permissions:
+  contents: read
+
+jobs:
+  indice:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - run: pip install boto3
+
+      - name: Armar el indice del archivo (solo lectura)
+        env:
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET: guarismo-crudo
+          SERIE: ${{ inputs.serie }}
+        run: python motor/indice.py --serie="$SERIE" --salida=indice.json
+
+      - name: Adjuntar el indice a la corrida
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: indice-${{ github.run_id }}
+          path: indice.json
+          retention-days: 30
+          if-no-files-found: warn
