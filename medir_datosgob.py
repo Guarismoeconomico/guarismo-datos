@@ -43,6 +43,12 @@ QUE IMPRIME
        explica: puntos nuevos, quitados y valores revisados, con fechas.
        Ademas se recalcula cada huella desde sus puntos (control interno:
        si no coincide en TODOS, sospechar primero del recalculo).
+    5. MUESTRARIO (consulta 22.20-a, 29-oct-2026). Debajo de cada cambio de
+       huella con valores revisados, una linea "muestrario" con 3 fechas de
+       ejemplo (primera, del medio y ultima revisada) con el valor antes y
+       despues, mas el maximo |cambio| y el maximo |cambio|/|antes|. Sirve
+       para distinguir ruido de redondeo (relativo ~1e-12) de otros numeros
+       (relativo ~1e-2). Solo agrega lineas: lo demas sale igual.
 
 VARIABLES DE ENTORNO
     R2_ENDPOINT, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY   (obligatorias)
@@ -233,6 +239,36 @@ def _diferencia(a, b):
             f"{len(revisados)} revisados ({_rango(revisados)})")
 
 
+def _es_num(v):
+    return isinstance(v, (int, float)) and not isinstance(v, bool)
+
+
+def _muestrario(a, b):
+    """3 ejemplos de valores revisados de a a b, y el tamano del cambio.
+    None si no hay valores revisados."""
+    da = {p[0]: p[1] for p in a}
+    db = {p[0]: p[1] for p in b}
+    revisados = sorted(k for k in set(da) & set(db) if da[k] != db[k])
+    if not revisados:
+        return None
+    idx = sorted({0, len(revisados) // 2, len(revisados) - 1})
+    ejemplos = " · ".join(f"{revisados[i]} {da[revisados[i]]!r}→{db[revisados[i]]!r}"
+                          for i in idx)
+    absolutos, relativos = [], []
+    for k in revisados:
+        x, y = da[k], db[k]
+        if _es_num(x) and _es_num(y):
+            absolutos.append(abs(y - x))
+            if x != 0:
+                relativos.append(abs(y - x) / abs(x))
+    tam = (f"máx |Δ| {max(absolutos):.3g}" if absolutos else "máx |Δ| —")
+    tam += (f" · máx |Δ|/|antes| {max(relativos):.3g}" if relativos else " · máx |Δ|/|antes| —")
+    no_num = len(revisados) - len(absolutos)
+    if no_num:
+        tam += f" · {no_num} no numérico(s)"
+    return f"{ejemplos} · {tam}"
+
+
 def huellas(snapshots):
     """Por serie: letras por huella, linea de dias, cambios, VAIVEN y
     huellas que no se pudieron recalcular."""
@@ -261,7 +297,7 @@ def huellas(snapshots):
             if previa is not None and sha != previa:
                 txt = (f"{letra[previa]}→{letra[sha]}  n {n_de[previa]}→{n_de[sha]} · "
                        + _diferencia(puntos_de[previa], puntos_de[sha]))
-                cambios.append((sello, txt))
+                cambios.append((sello, txt, _muestrario(puntos_de[previa], puntos_de[sha])))
                 if sha in vistas:
                     vaiven.append((sello, f"{letra[previa]}→{letra[sha]}"))
             vistas.add(sha)
@@ -285,8 +321,10 @@ def imprimir_huellas(snapshots):
         for desde, hasta, l in _tramos(seq):
             rango = _dia(desde) if desde == hasta else f"{_dia(desde)}…{_dia(hasta)}"
             print(f"      {rango:<12} {l}")
-        for sello, txt in cambios:
+        for sello, txt, muestra in cambios:
             print(f"      Δ {_dia(sello)}  {txt}")
+            if muestra:
+                print(f"          muestrario: {muestra}")
         for sello, txt in vaiven:
             print(f"      ⚠ VAIVEN {_dia(sello)}  {txt}: volvio una huella anterior")
         if internas:
