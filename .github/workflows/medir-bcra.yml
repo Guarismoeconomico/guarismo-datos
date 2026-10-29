@@ -1,0 +1,52 @@
+name: Guarismo medir bcra (manual, solo lectura)
+
+# Workflow MANUAL de medir_bcra.py. NO tiene reloj y no lo va a tener.
+#
+# POR QUE EXISTE (premisa de la 21.8-b, 29-oct-2026)
+#   boveda_bcra.py archiva como OK una serie que llega con 0 puntos sin error
+#   y no compara el rango de cada serie contra lo que declara el catalogo.
+#   Antes de escribir su guardia, este workflow mide el PASADO: recorre todos
+#   los snapshots bajo boveda/bcra/ y lista, serie por serie, los dias con
+#   0 puntos sin hueco, las series que se achican o traen vacios (contra la
+#   ventana de 7), el hasta/desde de cada serie contra ultFechaInformada /
+#   primerFechaInformada del catalogo, huellas y revisiones normales, y la
+#   integridad de cada objeto contra su sidecar .sha256.
+#
+# SOLO LECTURA
+#   Lleva solo las credenciales R2_* (las mismas con las que la diaria ya
+#   lista la boveda). NO lleva SUPABASE_*. El script no tiene ninguna llamada
+#   que escriba: lista y lee, nada mas.
+#
+# QUE MIRAR EN EL LOG
+#   · "N snapshots · <primero> … <ultimo>" — el primero tiene que ser del
+#     2-sep-2026 y el ultimo de la corrida mas reciente.
+#   · "integridad: N/N con sidecar que coincide" — cualquier ⚠ ahi es grave.
+#   · "forma de los puntos" — que claves trae cada punto.
+#   · El RESUMEN: CERO SIN HUECO, hasta/desde contra el catalogo, y los
+#     snapshots con anomalias.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  medir:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - run: pip install boto3
+
+      - name: Medir el BCRA hacia atras (solo lectura)
+        env:
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET: guarismo-crudo
+        run: python medir_bcra.py
