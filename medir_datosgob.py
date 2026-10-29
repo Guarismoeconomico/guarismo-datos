@@ -49,6 +49,13 @@ QUE IMPRIME
        despues, mas el maximo |cambio| y el maximo |cambio|/|antes|. Sirve
        para distinguir ruido de redondeo (relativo ~1e-12) de otros numeros
        (relativo ~1e-2). Solo agrega lineas: lo demas sale igual.
+    6. VACIOMETRO (consulta 22.20, 29-oct-2026). El 22.20-a mostro que el
+       backend malo manda puntos con valor VACIO (null). Por serie: vacios
+       por huella (premisa: las versiones sanas tienen pocos y estables) y
+       la REGLA aplicada hacia atras, la misma que tendria la guardia: un
+       snapshot es captura fallida si la serie trae MAS vacios que el
+       minimo de sus VENTANA_VACIOS snapshots anteriores con datos.
+       Asimetrica: menos vacios nunca suena. Es medicion, no veredicto.
 
 VARIABLES DE ENTORNO
     R2_ENDPOINT, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY   (obligatorias)
@@ -306,6 +313,71 @@ def huellas(snapshots):
     return out
 
 
+VENTANA_VACIOS = 7   # la misma ventana que VENTANA_REFERENCIA de la diaria
+
+
+def _vacios(puntos):
+    return sum(1 for p in puntos if len(p) < 2 or p[1] is None)
+
+
+def vaciometro(snapshots):
+    """Por serie: vacios por huella, vacios por dia y los snapshots que la
+    regla marca (mas vacios que el minimo de los VENTANA_VACIOS anteriores)."""
+    series = sorted({s for _, _, filas in snapshots for s in filas})
+    out = {}
+    for serie in series:
+        letra, por_huella, tiempo, marcados, previos = {}, {}, [], [], []
+        for sello, clave, filas in snapshots:
+            f = filas.get(serie)
+            if f is None or f["degradada"] or not f["n"] or not f.get("sha"):
+                tiempo.append((sello, "·"))
+                continue
+            v = _vacios(f["puntos"])
+            if f["sha"] not in letra:
+                letra[f["sha"]] = _letra(len(letra))
+                por_huella[letra[f["sha"]]] = v
+            ventana = previos[-VENTANA_VACIOS:]
+            if ventana and v > min(ventana):
+                marcados.append((sello, clave, v, min(ventana)))
+                tiempo.append((sello, f"{v} ⚠"))
+            else:
+                tiempo.append((sello, str(v)))
+            previos.append(v)
+        out[serie] = (por_huella, tiempo, marcados)
+    return out
+
+
+def imprimir_vaciometro(snapshots):
+    print()
+    print("=" * 66)
+    print(f"  VACIOMETRO (22.20) · vacios por dia · regla: mas vacios que el")
+    print(f"  minimo de los {VENTANA_VACIOS} snapshots anteriores · SOLO LECTURA")
+    print("=" * 66)
+    info = vaciometro(snapshots)
+    afectados = {}
+    for serie, (por_huella, tiempo, marcados) in info.items():
+        print(f"▸ {serie}   " + (f"⚠ {len(marcados)} marcado(s)" if marcados else "ninguno marcado"))
+        print("      vacios por huella: " + (" · ".join(f"{l} {v}" for l, v in por_huella.items()) or "—"))
+        for desde, hasta, marca in _tramos(tiempo):
+            rango = _dia(desde) if desde == hasta else f"{_dia(desde)}…{_dia(hasta)}"
+            print(f"      {rango:<12} {marca}")
+        for sello, clave, v, ref in marcados:
+            print(f"      ⚠ {_dia(sello)}  {v} vacios y el minimo de la ventana era {ref}")
+            afectados.setdefault(clave, []).append(serie)
+        print()
+    con = [s for s, (_, _, m) in info.items() if m]
+    print("=" * 66)
+    print(f"  VACIOMETRO · {len(info)} series")
+    print(f"  con marcados ({len(con)}): {', '.join(con) or '—'}")
+    print(f"  sin marcados ({len(info) - len(con)}): "
+          f"{', '.join(s for s in info if s not in con) or '—'}")
+    print(f"  snapshots marcados por la regla: {len(afectados)}")
+    for clave, ss in sorted(afectados.items(), key=lambda x: _sello(x[0])):
+        print(f"     {clave}  ·  {', '.join(ss)}")
+    print("  SOLO LECTURA: no se escribio nada en ningun lado.")
+    print("=" * 66)
+
+
 def imprimir_huellas(snapshots):
     print()
     print("=" * 66)
@@ -408,6 +480,7 @@ def main():
     print("  SOLO LECTURA: no se escribio nada en ningun lado.")
     print("=" * 66)
     imprimir_huellas(snapshots)
+    imprimir_vaciometro(snapshots)
     return 0
 
 
