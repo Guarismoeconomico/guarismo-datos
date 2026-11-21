@@ -116,6 +116,21 @@ EL SEGUNDO DESLISTADO — 21-sep-2026
     el 18-sep (article:modified_time 11:31) ya no. Misma razon que el de
     colocaciones. Segunda fuente que saca lo suyo de su listado.
 
+EL IPC SE SACO LA FECHA DEL NOMBRE — 21-nov-2026 (consulta 23.6 -> A)
+    Desde el 1-nov ipc_cuadros daba HUECO todos los dias: sh_ipc_11_26.xls y
+    sh_ipc_10_26.xls devolvian la pagina de error del INDEC. No era la fuente
+    sin publicar: el IPC de octubre salio el 12-nov y ese dia entraron como
+    NUEVO ipc_aperturas, ipc_serie_divisiones y compania. El informe de prensa
+    de esa edicion ya no cita sh_ipc_MM_AA.xls: cita una URL FIJA,
+    sh_ipc_divisiones.xls (verificado el 21-nov desde el navegador, NO desde
+    el runner: Excel, 2.396.160 bytes, Last-Modified 12-nov-2026 19:04:10 GMT).
+    Pasa del patron (e) al (a). El ultimo con fecha, sh_ipc_09_26.xls (el de
+    agosto), sigue en el servidor y queda vigilado como deslistado.
+    Hipotesis, no verificada: la edicion de septiembre (mediados de octubre)
+    ya salio con el nombre fijo y se piso el 12-nov. Si es asi, esa edicion
+    del cuadro no esta en la boveda. Los datos del IPC si: vienen por los csv
+    de URL fija. Testigo: SINFECHA.
+
 RETROCESO POR ERROR — diagnosticado y corregido el 15-sep-2026
     Hasta esta version, bajar_resolviendo() pasaba al candidato siguiente
     ante CUALQUIER error. Si el archivo del periodo vigente existia pero el
@@ -276,8 +291,10 @@ ARCHIVOS = {
     },
 
     # --- Tier 4: cuadros completos del IPC --------------------------------
-    # Cinco con URL fija de verdad y uno con el patron (e): sh_ipc_MM_AA.xls
-    # lleva el MES DE PUBLICACION adentro y rota todos los meses.
+    # Seis con URL fija de verdad y un deslistado. Hasta la edicion de
+    # septiembre de 2026 el cuadro principal llevaba el MES DE PUBLICACION en
+    # el nombre (patron (e), sh_ipc_MM_AA.xls); desde la de octubre la URL es
+    # fija (ver "EL IPC SE SACO LA FECHA DEL NOMBRE" en el encabezado).
     "ipc_aperturas": {
         "url": "https://www.indec.gob.ar/ftp/cuadros/economia/sh_ipc_aperturas.xls",
         "ext": "xls",
@@ -304,15 +321,29 @@ ARCHIVOS = {
         "desc": "IPC. Metadatos de las series. Un cambio aca es un cambio de definicion: "
                 "vale tanto como el dato.",
     },
-    "ipc_cuadros": {
-        "url": "https://www.indec.gob.ar/ftp/cuadros/economia/sh_ipc_{mes}.xls",
+    "ipc_divisiones": {
+        "url": "https://www.indec.gob.ar/ftp/cuadros/economia/sh_ipc_divisiones.xls",
         "ext": "xls",
         "desc": "IPC. Cuadros con las series desde diciembre 2016 hasta el mes de "
-                "referencia del informe. Patron (e): el MES DE PUBLICACION va adentro "
-                "del nombre y va UN mes adelante del dato. Verificado sobre cuatro "
-                "ediciones (ene-2025 → 02_25, sep-2025 → 10_25, mar-2026 → 04_26, "
-                "jul-2026 → 08_26) leyendole el pie a los informes de prensa. "
-                "ARCHIVAR NO ES PUBLICAR: nada de esto sale a ninguna pantalla.",
+                "referencia del informe. URL FIJA desde la edicion de octubre de 2026: "
+                "el informe de prensa del 12-nov-2026 la cita asi. Sucede a "
+                "ipc_cuadros (sh_ipc_MM_AA.xls, patron (e), hasta la edicion de "
+                "agosto). ARCHIVAR NO ES PUBLICAR: nada de esto sale a ninguna pantalla.",
+    },
+    # --- El ultimo cuadro del IPC con fecha en el nombre, DESLISTADO. -------
+    # sh_ipc_09_26.xls es la edicion de agosto 2026 (Last-Modified
+    # 10-sep-2026 18:52:05 GMT, sha256 f57bf8516dd7..., ya en R2 bajo
+    # ipc_cuadros). Desde la edicion de octubre el INDEC usa una URL fija y
+    # este archivo quedo colgado. Misma logica que coloc_deslistado_31_5_26:
+    #   sin cambios -> sigue en el servidor
+    #   HUECO 404   -> lo borraron. Eso es el dato, con fecha.
+    #   NUEVO       -> alguien subio OTRA cosa con este nombre.
+    "ipc_deslistado_09_26": {
+        "url": "https://www.indec.gob.ar/ftp/cuadros/economia/sh_ipc_09_26.xls",
+        "ext": "xls",
+        "desc": "IPC. Cuadros, edicion de agosto 2026: el ultimo publicado con el mes "
+                "en el nombre. Desde la edicion de octubre el cuadro vive en "
+                "sh_ipc_divisiones.xls. Clase B, archivo deslistado.",
     },
 
     # --- Sector externo ---------------------------------------------------
